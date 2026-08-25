@@ -88,6 +88,7 @@
                 <p class="text-[9px] font-bold text-amber-400 tracking-widest mt-1">— PISOS — GRANITO EXÓTICO</p>
                 <div class="grid grid-cols-2 gap-1.5 mt-1">
                     <button data-label="piso granito exotic" onclick="addObject('floorTile','graniteExotic')" class="item-btn py-1.5 px-2 bg-gradient-to-br from-amber-200 via-rose-300 to-sky-300 border border-amber-400 rounded-xl text-[10px] font-bold text-slate-900 transition cursor-pointer">💎 Granito Exótico</button>
+                    <button data-label="piso marrom rajado" onclick="addObject('floorTile','graniteBrownVein')" class="item-btn py-1.5 px-2 bg-gradient-to-br from-amber-900 via-orange-800 to-stone-700 border border-amber-800 rounded-xl text-[10px] font-bold text-amber-100 transition cursor-pointer">🟫 Marrom Rajado</button>
                     <button data-label="piso granito preto" onclick="addObject('floorTile','graniteBlack')" class="item-btn py-1.5 px-2 bg-zinc-900 border border-zinc-700 rounded-xl text-[10px] font-medium text-zinc-100 transition cursor-pointer">⬛ São Gabriel</button>
                     <button data-label="piso granito verde" onclick="addObject('floorTile','graniteGreen')" class="item-btn py-1.5 px-2 bg-emerald-900 border border-emerald-700 rounded-xl text-[10px] font-medium text-emerald-100 transition cursor-pointer">🟩 Verde Ubatuba</button>
                     <button data-label="piso cerâmica" onclick="addObject('floorTile','ceramic')" class="item-btn py-1.5 px-2 bg-amber-50 border border-amber-200 rounded-xl text-[10px] font-medium text-amber-900 transition cursor-pointer">🏛️ Cerâmica Clara</button>
@@ -380,8 +381,8 @@
                 if(variant==='graniteExotic'){ color=0xd4a574; name="Piso Granito Exótico"; }
                 else if(variant==='graniteBlack'){ color=0x1a1a1e; name="Piso São Gabriel Preto"; }
                 else if(variant==='graniteGreen'){ color=0x1a3a2a; name="Piso Verde Ubatuba"; }
+                else if(variant==='graniteBrownVein'){ color=0x6b3a1f; name="Piso Marrom Rajado"; }
                 else { color=0xf5f0e6; name="Piso Cerâmica 60x60"; }
-                // guarda variante para textura
                 window._lastFloorVariant=variant||'ceramic';
             }
             else if(type==='windowGlass'){ w=2.4;h=1.6;d=0.08;color=0xe2e8f0;name="Janela Panorâmica"; }
@@ -757,26 +758,33 @@
             if(variant==='graniteExotic'){ base='#c9a86a'; }
             else if(variant==='graniteBlack'){ base='#0f0f12'; }
             else if(variant==='graniteGreen'){ base='#1e3a2e'; }
+            else if(variant==='graniteBrownVein'){ base='#6b3a1f'; }
             else if(variant==='ceramic'){ return createCeramicTexture(baseHex); }
             ctx.fillStyle=base; ctx.fillRect(0,0,size,size);
-            const speckles = variant==='graniteExotic' ? 900 : variant==='graniteBlack' ? 700 : 600;
+            const speckles = variant==='graniteExotic' ? 900 : variant==='graniteBlack' ? 700 : variant==='graniteBrownVein' ? 850 : 600;
             for(let i=0;i<speckles;i++){
                 const x=Math.random()*size, y=Math.random()*size, r=1+Math.random()*4;
                 let col;
                 if(variant==='graniteExotic'){ const cols=['#8b4513','#2f4f2f','#4a2c17','#d2b48c','#556b2f','#8b0000','#f5deb3']; col=cols[Math.floor(Math.random()*cols.length)]; }
                 else if(variant==='graniteBlack'){ const cols=['#3a3a3c','#d4af37','#5a5a5e','#1a1a1a','#c0c0c0']; col=cols[Math.floor(Math.random()*cols.length)]; }
                 else if(variant==='graniteGreen'){ const cols=['#2d5a27','#8fbc8f','#1a2e1a','#556b2f','#c0d6a4']; col=cols[Math.floor(Math.random()*cols.length)]; }
+                else if(variant==='graniteBrownVein'){ const cols=['#3e1f0a','#8d5a2b','#d2a679','#4a2c0a','#a67c52','#2b1a0e','#e6c2a0']; col=cols[Math.floor(Math.random()*cols.length)]; }
                 else col='#a0825a';
                 ctx.fillStyle=col; ctx.globalAlpha=0.65+Math.random()*0.35; ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.fill();
             }
             ctx.globalAlpha=1;
-            // veios longos exóticos
-            if(variant==='graniteExotic'){
-                ctx.strokeStyle='rgba(60,30,10,0.18)'; ctx.lineWidth=2+(Math.random()*3);
-                for(let i=0;i<6;i++){ ctx.beginPath(); ctx.moveTo(Math.random()*size, Math.random()*size); ctx.bezierCurveTo(Math.random()*size, Math.random()*size, Math.random()*size, Math.random()*size, Math.random()*size, Math.random()*size); ctx.stroke(); }
+            // veios rajados marrons / exóticos
+            if(variant==='graniteExotic' || variant==='graniteBrownVein'){
+                ctx.strokeStyle= variant==='graniteBrownVein' ? 'rgba(45,18,5,0.32)' : 'rgba(60,30,10,0.18)'; ctx.lineWidth= variant==='graniteBrownVein' ? 4 : 2+(Math.random()*3);
+                const veins = variant==='graniteBrownVein' ? 9 : 6;
+                for(let i=0;i<veins;i++){ ctx.beginPath(); ctx.moveTo(Math.random()*size, Math.random()*size); ctx.bezierCurveTo(Math.random()*size, Math.random()*size, Math.random()*size, Math.random()*size, Math.random()*size, Math.random()*size); ctx.stroke(); }
+                if(variant==='graniteBrownVein'){
+                    ctx.strokeStyle='rgba(210,166,121,0.22)'; ctx.lineWidth=1.5;
+                    for(let i=0;i<5;i++){ ctx.beginPath(); ctx.moveTo(Math.random()*size, Math.random()*size); ctx.bezierCurveTo(Math.random()*size, Math.random()*size, Math.random()*size, Math.random()*size, Math.random()*size, Math.random()*size); ctx.stroke(); }
+                }
             }
             // rejunte
-            ctx.strokeStyle= variant==='graniteBlack' ? 'rgba(80,80,85,0.95)' : variant==='graniteGreen' ? 'rgba(100,120,100,0.9)' : 'rgba(160,150,135,0.92)'; ctx.lineWidth=5;
+            ctx.strokeStyle= variant==='graniteBlack' ? 'rgba(80,80,85,0.95)' : variant==='graniteGreen' ? 'rgba(100,120,100,0.9)' : variant==='graniteBrownVein' ? 'rgba(90,60,35,0.95)' : 'rgba(160,150,135,0.92)'; ctx.lineWidth=5;
             const tiles=2; const step=size/tiles;
             for(let i=0;i<=tiles;i++){ ctx.beginPath(); ctx.moveTo(i*step,0); ctx.lineTo(i*step,size); ctx.stroke(); ctx.beginPath(); ctx.moveTo(0,i*step); ctx.lineTo(size,i*step); ctx.stroke(); }
             const tex=new THREE.CanvasTexture(c); tex.wrapS=tex.wrapT=THREE.RepeatWrapping; tex.encoding=THREE.sRGBEncoding; tex.anisotropy=renderer.capabilities.getMaxAnisotropy(); return tex;
@@ -999,16 +1007,14 @@
                 let tex;
                 if(variant==='ceramic') tex=createCeramicTexture(colorHex);
                 else tex=createGraniteTexture(variant, colorHex);
-                const mat = new THREE.MeshStandardMaterial({map:tex, roughness: variant==='graniteBlack'?0.42: variant==='graniteExotic'?0.38:0.55, metalness: variant==='graniteBlack'?0.18:0.04});
+                const mat = new THREE.MeshStandardMaterial({map:tex, roughness: variant==='graniteBlack'?0.42: variant==='graniteExotic'?0.32: variant==='graniteBrownVein'?0.38:0.55, metalness: variant==='graniteBlack'?0.18:0.04});
                 const geo = new THREE.BoxGeometry(w,h,d);
                 mesh = new THREE.Mesh(geo, mat);
                 mesh.position.set(x,y,z);
                 mesh.userData.paintable=true;
                 mesh.userData.variant=variant;
                 mesh.material.userData={ isFloor:true, baseHex:colorHex, variant:variant };
-                const edge = new THREE.LineSegments(new THREE.EdgesGeometry(geo), new THREE.LineBasicMaterial({color:0xa8a29e, transparent:true, opacity:0.5}));
-                edge.userData.paintable=false;
-                mesh.add(edge);
+                // borda removida - era LineSegments que soltava ao escalar (z-fighting)
                 mesh.receiveShadow=true; mesh.castShadow=false;
             } else if(type==='sign'){
                 mesh=createSignGroup(w,h,d,colorHex,name);
