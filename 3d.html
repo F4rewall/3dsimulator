@@ -191,6 +191,7 @@
         let dragPlane = new THREE.Plane();
         let hoverObject = null;
         let moveForward=false, moveBackward=false, moveLeft=false, moveRight=false, moveUp=false, moveDown=false;
+        let isOrbiting=false;
         let prevTime = performance.now();
         let velocity = new THREE.Vector3();
         let direction = new THREE.Vector3();
@@ -221,10 +222,17 @@
 
             orbitControls = new THREE.OrbitControls(camera, renderer.domElement);
             orbitControls.enableDamping = true;
-            orbitControls.dampingFactor = 0.06;
-            orbitControls.maxPolarAngle = Math.PI / 2 - 0.02;
+            orbitControls.dampingFactor = 0.08;
+            orbitControls.rotateSpeed = 0.65;
+            orbitControls.zoomSpeed = 0.9;
+            orbitControls.panSpeed = 0.8;
+            orbitControls.screenSpacePanning = false;
             orbitControls.minDistance = 2;
             orbitControls.maxDistance = 800;
+            orbitControls.maxPolarAngle = Math.PI / 2 - 0.015;
+            orbitControls.minPolarAngle = 0.08;
+            orbitControls.addEventListener('start', ()=>{ isOrbiting=true; if(currentMode==='editor') document.body.style.cursor='grabbing'; });
+            orbitControls.addEventListener('end', ()=>{ isOrbiting=false; document.body.style.cursor=''; });
 
             // Iluminação melhorada
             scene.add(new THREE.HemisphereLight(0xffffff, 0x0a1a2f, 0.6));
@@ -1497,8 +1505,8 @@
                 }
                 if(hasCollided){ camera.position.x=oldX; camera.position.z=oldZ; velocity.set(0,0,0); }
             } else {
-                // Locomoção livre no Editor: WASD + Q/E
-                if(!isDraggingObject && !isDraggingSV && (moveForward||moveBackward||moveLeft||moveRight||moveUp||moveDown)){
+                // Locomoção livre no Editor: WASD + Q/E (pausa enquanto orbita com mouse)
+                if(!isDraggingObject && !isDraggingSV && !isOrbiting && (moveForward||moveBackward||moveLeft||moveRight||moveUp||moveDown)){
                     const speed = (walkSpeed*0.9 + 8) * delta; // base + slider
                     const forward=new THREE.Vector3(); camera.getWorldDirection(forward); forward.y=0; forward.normalize();
                     const right=new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0,1,0)).negate();
