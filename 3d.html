@@ -1189,6 +1189,83 @@
             });
             return best;
         }
+        function ensureWallMats(wall){
+            if(wall.userData._hasHoleMats) return;
+            const srcMat = Array.isArray(wall.material) ? wall.material[0] : wall.material;
+            const baseColor = srcMat.color ? srcMat.color.clone() : new THREE.Color(0x94a3b8);
+            const sideMat = new THREE.MeshStandardMaterial({color: baseColor, roughness:0.78});
+            const faceMat = new THREE.MeshStandardMaterial({color: baseColor, roughness:0.78, transparent:true, alphaTest:0.05});
+            // BoxGeometry order: right,left,top,bottom,front,back (0-5)
+            wall.material = [sideMat, sideMat, sideMat, sideMat, faceMat.clone(), faceMat.clone()];
+            wall.userData._faceMats=[wall.material[4], wall.material[5]];
+            wall.userData._hasHoleMats=true;
+        }
+        function updateWallHoles(wall){
+            const openings = wall.userData.openings || [];
+            ensureWallMats(wall);
+            const box=new THREE.Box3().setFromObject(wall);
+            const sx=box.max.x-box.min.x, sy=box.max.y-box.min.y, sz=box.max.z-box.min.z;
+            const alongX = sx > sz;
+            const wallW = Math.max(sx, sz);
+            const wallH = sy;
+            // canvas que representa a face da parede vista de frente
+            const cw=1024, ch=Math.round(1024 * wallH / wallW); 
+            const c=document.createElement('canvas'); c.width=cw; c.height=ch;
+            const ctx=c.getContext('2d');
+            ctx.fillStyle='#ffffff'; ctx.fillRect(0,0,cw,ch);
+            // desenha buracos como transparente (preto no alphaMap)
+            ctx.fillStyle='#000000';
+            openings.forEach(op=>{
+                // op: {cx, cy, w, h} em coords mundo relativas à parede
+                // mapear x local -> u, y local -> v
+                // para alongX: xLocal = op.cx - wallCenterX, yLocal = op.cy - wallCenterY
+                let u, v, wh, hh;
+                if(alongX){
+                    const wallCx=(box.min.x+box.max.x)/2, wallCy=(box.min.y+box.max.y)/2;
+                    const lx = op.cx - wallCx;
+                    const ly = op.cy - wallCy;
+                    wh = (op.w / wallW) * cw;
+                    hh = (op.h / wallH) * ch;
+                    u = cw/2 + (lx / wallW)*cw - wh/2;
+                    v = ch/2 - (ly / wallH)*ch - hh/2; // y invertido
+                } else {
+                    const wallCz=(box.min.z+box.max.z)/2, wallCy=(box.min.y+box.max.y)/2;
+                    const lz = op.cz - wallCz;
+                    const ly = op.cy - wallCy;
+                    wh = (op.w / wallW) * cw;
+                    hh = (op.h / wallH) * ch;
+                    u = cw/2 + (lz / wallW)*cw - wh/2;
+                    v = ch/2 - (ly / wallH)*ch - hh/2;
+                }
+                // retângulo com margem 2px para não vazar borda
+                ctx.fillRect(Math.max(0,u-1), Math.max(0,v-1), Math.min(cw,wh+2), Math.min(ch,hh+2));
+            });
+            const tex=new THREE.CanvasTexture(c);
+            tex.flipY=false; tex.needsUpdate=true;
+            wall.userData._faceMats.forEach(m=>{ m.alphaMap=tex; m.transparent=true; m.needsUpdate=true; });
+            // também guarda para colisão
+            wall.userData._holeCanvas=c;
+        }
+        function addWallOpening(wall, obj){
+            ensureWallMats(wall);
+            if(!wall.userData.openings) wall.userData.openings=[];
+            // remove abertura antiga deste objeto
+            wall.userData.openings = wall.userData.openings.filter(o=>o.id!==obj.userData.id);
+            const obox=new THREE.Box3().setFromObject(obj);
+            const w = Math.max(obox.max.x-obox.min.x, obox.max.z-obox.min.z);
+            const h = obox.max.y-obox.min.y;
+            const cx = obj.position.x, cz = obj.position.z, cy = obj.position.y;
+            wall.userData.openings.push({id:obj.userData.id, cx, cz, cy, w:w*0.98, h:h*0.98});
+            obj.userData._attachedWall = wall;
+            updateWallHoles(wall);
+        }
+        function removeWallOpening(obj){
+            const wall=obj.userData._attachedWall;
+            if(!wall || !wall.userData.openings) return;
+            wall.userData.openings = wall.userData.openings.filter(o=>o.id!==obj.userData.id);
+            obj.userData._attachedWall=null;
+            updateWallHoles(wall);
+        }
         function getTableTopAt(x,z){
             const tables = ['officeDesk','reception','desk'];
             let bestTop = null;
@@ -1245,9 +1322,17 @@
                             selectedObject.userData._onWall=true;
                             showToast('🧲 Encaixado na parede! (atravessável)');
                         }
+                        if(['door','windowGlass'].includes(selectedObject.userData.type)){
+                            addWallOpening(s.wall, selectedObject);
+                        }
                         return;
                     } else {
-                        if(selectedObject.userData._onWall) selectedObject.userData._onWall=false;
+                        if(selectedObject.userData._onWall){
+                            selectedObject.userData._onWall=false;
+                            if(['door','windowGlass'].includes(selectedObject.userData.type)){
+                                removeWallOpening(selectedObject);
+                            }
+                        }
                     }
                 }
                 selectedObject.position.x = nx;
@@ -1428,6 +1513,7 @@
         }
         function deleteSelectedObject(){
             if(!selectedObject) return;
+            if(['door','windowGlass'].includes(selectedObject.userData.type)) removeWallOpening(selectedObject);
             scene.remove(selectedObject);
             Object.values(floors).forEach(f=>{ if(f&&f.objects){ const idx=f.objects.indexOf(selectedObject); if(idx>-1) f.objects.splice(idx,1); }});
             clearSelection();
@@ -1498,6 +1584,23 @@
                 if(floors[currentFloor]&&floors[currentFloor].objects){
                     floors[currentFloor].objects.forEach(obj=>{
                         if(obj.userData && (obj.userData.type==='wall'||obj.userData.type==='column')){
+                            // se parede tem vãos de porta/janela, ignora colisão no vão
+                            if(obj.userData.type==='wall' && obj.userData.openings && obj.userData.openings.length>0){
+                                const p=camera.position;
+                                const inHole=obj.userData.openings.some(op=>{
+                                    const margin=playerRadius + 0.08;
+                                    // abertura cobre altura? verifica Y dentro do vão (+ margem)
+                                    const yIn = p.y >= (op.cy - op.h/2 - 0.15) && p.y <= (op.cy + op.h/2 + 0.15);
+                                    if(!yIn) return false;
+                                    // x/z dentro da largura do vão
+                                    // alongX: vão estende em X, parede fina em Z -> checa X
+                                    const boxW=new THREE.Box3().setFromObject(obj);
+                                    const alongX = (boxW.max.x-boxW.min.x) > (boxW.max.z-boxW.min.z);
+                                    if(alongX) return p.x >= op.cx - op.w/2 - margin && p.x <= op.cx + op.w/2 + margin;
+                                    else return p.z >= op.cz - op.w/2 - margin && p.z <= op.cz + op.w/2 + margin;
+                                });
+                                if(inHole) return;
+                            }
                             const box=new THREE.Box3().setFromObject(obj); box.expandByScalar(playerRadius);
                             if(box.containsPoint(camera.position)) hasCollided=true;
                         }
