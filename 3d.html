@@ -190,7 +190,7 @@
         let dragOffset = new THREE.Vector3();
         let dragPlane = new THREE.Plane();
         let hoverObject = null;
-        let moveForward=false, moveBackward=false, moveLeft=false, moveRight=false;
+        let moveForward=false, moveBackward=false, moveLeft=false, moveRight=false, moveUp=false, moveDown=false;
         let prevTime = performance.now();
         let velocity = new THREE.Vector3();
         let direction = new THREE.Vector3();
@@ -300,12 +300,25 @@
             renderer.domElement.addEventListener('mousemove', onHover);
 
             document.addEventListener('keydown', (e) => {
-                if(currentMode!=='streetview') return;
-                switch(e.code){ case 'KeyW':case 'ArrowUp': moveForward=true; break; case 'KeyS':case 'ArrowDown': moveBackward=true; break; case 'KeyA':case 'ArrowLeft': moveLeft=true; break; case 'KeyD':case 'ArrowRight': moveRight=true; break; }
+                if(e.target.tagName==='INPUT') return;
+                switch(e.code){
+                    case 'KeyW':case 'ArrowUp': moveForward=true; break;
+                    case 'KeyS':case 'ArrowDown': moveBackward=true; break;
+                    case 'KeyA':case 'ArrowLeft': moveLeft=true; break;
+                    case 'KeyD':case 'ArrowRight': moveRight=true; break;
+                    case 'KeyQ':case 'Space': moveUp=true; break;
+                    case 'KeyE':case 'ShiftLeft': case 'ShiftRight': if(currentMode==='editor') moveDown=true; break;
+                }
             });
             document.addEventListener('keyup', (e) => {
-                if(currentMode!=='streetview') return;
-                switch(e.code){ case 'KeyW':case 'ArrowUp': moveForward=false; break; case 'KeyS':case 'ArrowDown': moveBackward=false; break; case 'KeyA':case 'ArrowLeft': moveLeft=false; break; case 'KeyD':case 'ArrowRight': moveRight=false; break; }
+                switch(e.code){
+                    case 'KeyW':case 'ArrowUp': moveForward=false; break;
+                    case 'KeyS':case 'ArrowDown': moveBackward=false; break;
+                    case 'KeyA':case 'ArrowLeft': moveLeft=false; break;
+                    case 'KeyD':case 'ArrowRight': moveRight=false; break;
+                    case 'KeyQ':case 'Space': moveUp=false; break;
+                    case 'KeyE':case 'ShiftLeft': case 'ShiftRight': moveDown=false; break;
+                }
                 if(e.code==='ShiftLeft' || e.code==='ShiftRight'){ isDraggingObject=false; }
             });
             renderer.domElement.addEventListener('mousedown', (e) => {
@@ -1438,7 +1451,7 @@
                 btnEditor.className="py-1.5 bg-sky-600 hover:bg-sky-500 text-white rounded-xl text-xs font-bold transition shadow-lg shadow-sky-600/20 cursor-pointer";
                 btnSV.className="py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold transition cursor-pointer";
                 badge.className="px-2 py-0.5 bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-full text-[10px] font-semibold"; badge.innerText="Editor";
-                speedBox.classList.add('hidden'); crosshair.style.display='none'; hint.innerText="🖱️ Clique e SEGURE para arrastar! SHIFT+arrastar = levitar.";
+                speedBox.classList.add('hidden'); crosshair.style.display='none'; hint.innerText="🖱️ SEGURE para arrastar | WASD=voar | Q/E sobe/desce | SHIFT+arrastar=levitar objeto";
                 orbitControls.enabled=true; camera.position.set(0,35,50); orbitControls.target.set(0,currentFloor* floorHeight,0);
             } else {
                 btnSV.className="py-1.5 bg-sky-600 hover:bg-sky-500 text-white rounded-xl text-xs font-bold transition shadow-lg shadow-sky-600/20 cursor-pointer";
@@ -1483,7 +1496,22 @@
                     });
                 }
                 if(hasCollided){ camera.position.x=oldX; camera.position.z=oldZ; velocity.set(0,0,0); }
-            } else orbitControls.update();
+            } else {
+                // Locomoção livre no Editor: WASD + Q/E
+                if(!isDraggingObject && !isDraggingSV && (moveForward||moveBackward||moveLeft||moveRight||moveUp||moveDown)){
+                    const speed = (walkSpeed*0.9 + 8) * delta; // base + slider
+                    const forward=new THREE.Vector3(); camera.getWorldDirection(forward); forward.y=0; forward.normalize();
+                    const right=new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0,1,0)).negate();
+                    // forward é para -Z, então inverter
+                    if(moveForward){ camera.position.addScaledVector(forward, speed); orbitControls.target.addScaledVector(forward, speed); }
+                    if(moveBackward){ camera.position.addScaledVector(forward, -speed); orbitControls.target.addScaledVector(forward, -speed); }
+                    if(moveLeft){ camera.position.addScaledVector(right, -speed); orbitControls.target.addScaledVector(right, -speed); }
+                    if(moveRight){ camera.position.addScaledVector(right, speed); orbitControls.target.addScaledVector(right, speed); }
+                    if(moveUp){ camera.position.y+=speed; orbitControls.target.y+=speed; }
+                    if(moveDown){ camera.position.y-=speed; orbitControls.target.y-=speed; }
+                }
+                orbitControls.update();
+            }
             prevTime=time; renderer.render(scene,camera);
         }
     </script>
