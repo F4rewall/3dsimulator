@@ -1,0 +1,1485 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hospital 3D Pro Studio - Editor & Street View Editável</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Inter', sans-serif; user-select: none; }
+        canvas { display: block; width: 100vw; height: 100vh; cursor: grab; }
+        canvas.grabbing { cursor: grabbing !important; }
+        .glass-panel { background: rgba(15, 23, 42, 0.96); backdrop-filter: blur(16px); border: 1px solid rgba(255, 255, 255, 0.12); }
+        #ui-container { transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s ease; }
+        #ui-container.minimized { transform: translateX(-105%); opacity: 0; pointer-events: none; }
+        #crosshair { position: absolute; top: 50%; left: 50%; width: 12px; height: 12px; transform: translate(-50%, -50%); pointer-events: none; display: none; z-index: 20; }
+        #crosshair::before, #crosshair::after { content: ''; position: absolute; background: rgba(56, 189, 248, 0.95); border-radius: 2px; box-shadow: 0 0 4px rgba(0,0,0,0.8); }
+        #crosshair::before { top: 5px; left: 0; width: 12px; height: 2px; }
+        #crosshair::after { top: 0; left: 5px; width: 2px; height: 12px; }
+        .drag-hint { animation: pulse 1.5s infinite; }
+        @keyframes pulse { 0%,100%{opacity:0.6} 50%{opacity:1} }
+    </style>
+</head>
+<body class="bg-slate-950 text-slate-100">
+    <div id="crosshair"></div>
+    <button id="btn-restore" onclick="toggleMenu()" class="absolute top-4 left-4 z-20 hidden bg-sky-600 hover:bg-sky-500 text-white p-3 rounded-2xl shadow-2xl flex items-center gap-2 text-xs font-bold transition cursor-pointer">🏥 Abrir Menu Hospital</button>
+
+    <div id="ui-container" class="absolute top-4 left-4 z-10 w-80 max-w-[85vw] glass-panel rounded-2xl p-3.5 shadow-2xl flex flex-col gap-2.5 max-h-[92vh] overflow-y-auto">
+        <div class="flex items-center justify-between border-b border-slate-800 pb-2">
+            <h1 class="text-xs font-extrabold text-sky-400 flex items-center gap-1.5">🏥 Hospital 3D Pro</h1>
+            <div class="flex items-center gap-2">
+                <span id="mode-badge" class="px-2 py-0.5 bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-full text-[10px] font-semibold">Editor</span>
+                <button onclick="toggleMenu()" class="p-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs transition cursor-pointer" title="Minimizar Menu">➖</button>
+            </div>
+        </div>
+        <p id="instruction-hint" class="text-[10px] text-slate-400 drag-hint">🖱️ <b>SEGURE</b> para arrastar! Passe sobre a <b>mesa/balcão</b> para apoiar em cima. SHIFT+arrastar = levitar.</p>
+
+        <div class="bg-sky-950/40 rounded-xl p-2.5 border border-sky-800/50 flex flex-col gap-1.5">
+            <div class="text-[11px] font-semibold text-sky-300 flex items-center justify-between"><span>🔍 BUSCAR SETOR / SALA</span></div>
+            <div class="flex gap-1.5">
+                <input type="text" id="searchInput" placeholder="Ex: UTI, Recepção..." class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-slate-200 focus:outline-none focus:border-sky-500">
+                <button onclick="searchAndTeleport()" class="px-2.5 bg-sky-600 hover:bg-sky-500 rounded-lg text-xs font-bold transition cursor-pointer text-white">Ir</button>
+            </div>
+        </div>
+
+        <div class="bg-slate-900/80 rounded-xl p-2.5 border border-slate-800 flex flex-col gap-1.5">
+            <div class="flex justify-between items-center text-[11px] font-semibold text-slate-300">
+                <span>🌍 MAPA INFINITO</span>
+                <span id="current-floor-label" class="text-sky-400 font-bold">Térreo (0m)</span>
+            </div>
+            <p class="text-[9px] text-slate-500">Construa sem limites - o chão se estende ao infinito</p>
+            <div class="grid grid-cols-3 gap-1.5">
+                <button onclick="changeFloor(0)" class="py-1 bg-sky-600 hover:bg-sky-500 rounded-lg text-[11px] font-medium transition cursor-pointer text-white">Térreo</button>
+                <button onclick="changeFloor(1)" class="py-1 bg-slate-800 hover:bg-slate-700 rounded-lg text-[11px] font-medium transition cursor-pointer">2º Andar</button>
+                <button onclick="addNewFloor()" class="py-1 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-xs font-bold transition cursor-pointer" title="Adicionar Novo Andar">+</button>
+            </div>
+            <label class="flex items-center gap-1.5 text-[10px] text-slate-300 mt-1 cursor-pointer"><input type="checkbox" id="snapToggle" checked class="accent-sky-500"> Snap na grade (1m)</label>
+            <label class="flex items-center gap-1.5 text-[10px] text-slate-300 cursor-pointer"><input type="checkbox" id="gridToggle" checked onchange="toggleGrid(this.checked)" class="accent-sky-500"> Mostrar grade infinita</label>
+        </div>
+
+        <div class="flex flex-col gap-1.5">
+            <div class="grid grid-cols-2 gap-1.5">
+                <button onclick="setMode('editor')" id="btn-mode-editor" class="py-1.5 bg-sky-600 hover:bg-sky-500 text-white rounded-xl text-xs font-bold transition shadow-lg shadow-sky-600/20 cursor-pointer">🛠️ Editor Livre</button>
+                <button onclick="setMode('streetview')" id="btn-mode-sv" class="py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold transition cursor-pointer">🚶‍♂️ Street View</button>
+            </div>
+            <div id="speed-control-box" class="hidden bg-slate-900/90 rounded-xl p-2 border border-slate-800 flex flex-col gap-1">
+                <div class="flex justify-between items-center text-[10px] text-slate-300"><span>Velocidade:</span><span id="speed-label" class="text-sky-400 font-bold">18 km/h</span></div>
+                <input type="range" id="walkSpeedInput" min="5" max="45" value="18" oninput="updateWalkSpeed(this.value)" class="w-full accent-sky-500 cursor-pointer">
+            </div>
+        </div>
+
+        <div class="flex flex-col gap-1.5 border-t border-slate-800 pt-2">
+            <h2 class="text-[10px] font-semibold text-slate-300 uppercase tracking-wider">Adicionar Itens por Categoria</h2>
+            <input type="text" id="itemSearch" oninput="filterItems(this.value)" placeholder="🔍 Filtrar itens (ex: cadeira, piso...)" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-[11px] text-slate-200 focus:outline-none focus:border-sky-500">
+            <!-- ESTRUTURA -->
+            <div class="item-cat" data-cat="estrutura">
+                <p class="text-[9px] font-bold text-sky-400 tracking-widest mt-1">— ESTRUTURA</p>
+                <div class="grid grid-cols-2 gap-1.5 mt-1">
+                    <button data-label="parede reta" onclick="addObject('wall')" class="item-btn py-1.5 px-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-xl text-[11px] font-medium transition cursor-pointer">🧱 Parede Reta</button>
+                    <button data-label="janela panorâmica" onclick="addObject('windowGlass')" class="item-btn py-1.5 px-2 bg-sky-100 hover:bg-sky-200 border border-sky-300 rounded-xl text-[11px] font-medium text-sky-900 transition cursor-pointer">🪟 Janela Panorâmica</button>
+                    <button data-label="porta madeira" onclick="addObject('door')" class="item-btn py-1.5 px-2 bg-amber-950/40 hover:bg-amber-900/40 border border-amber-800/60 rounded-xl text-[11px] font-medium text-amber-200 transition cursor-pointer">🚪 Porta Madeira</button>
+                    <button data-label="coluna pilar" onclick="addObject('column')" class="item-btn py-1.5 px-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-xl text-[11px] font-medium transition cursor-pointer">🏛️ Coluna Pilar</button>
+                </div>
+            </div>
+            <!-- PISOS GRANITO EXÓTICO -->
+            <div class="item-cat" data-cat="pisos">
+                <p class="text-[9px] font-bold text-amber-400 tracking-widest mt-1">— PISOS — GRANITO EXÓTICO</p>
+                <div class="grid grid-cols-2 gap-1.5 mt-1">
+                    <button data-label="piso granito exotic" onclick="addObject('floorTile','graniteExotic')" class="item-btn py-1.5 px-2 bg-gradient-to-br from-amber-200 via-rose-300 to-sky-300 border border-amber-400 rounded-xl text-[10px] font-bold text-slate-900 transition cursor-pointer">💎 Granito Exótico</button>
+                    <button data-label="piso granito preto" onclick="addObject('floorTile','graniteBlack')" class="item-btn py-1.5 px-2 bg-zinc-900 border border-zinc-700 rounded-xl text-[10px] font-medium text-zinc-100 transition cursor-pointer">⬛ São Gabriel</button>
+                    <button data-label="piso granito verde" onclick="addObject('floorTile','graniteGreen')" class="item-btn py-1.5 px-2 bg-emerald-900 border border-emerald-700 rounded-xl text-[10px] font-medium text-emerald-100 transition cursor-pointer">🟩 Verde Ubatuba</button>
+                    <button data-label="piso cerâmica" onclick="addObject('floorTile','ceramic')" class="item-btn py-1.5 px-2 bg-amber-50 border border-amber-200 rounded-xl text-[10px] font-medium text-amber-900 transition cursor-pointer">🏛️ Cerâmica Clara</button>
+                </div>
+            </div>
+            <!-- MOBILIÁRIO -->
+            <div class="item-cat" data-cat="mobiliario">
+                <p class="text-[9px] font-bold text-sky-400 tracking-widest mt-1">— MOBILIÁRIO</p>
+                <div class="grid grid-cols-2 gap-1.5 mt-1">
+                    <button data-label="cadeira realista" onclick="addObject('chair')" class="item-btn py-1.5 px-2 bg-sky-950/40 hover:bg-sky-900/40 border border-sky-800/60 rounded-xl text-[11px] font-medium text-sky-200 transition cursor-pointer">🪑 Cadeira Realista</button>
+                    <button data-label="mesa escritório" onclick="addObject('officeDesk')" class="item-btn py-1.5 px-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-xl text-[11px] font-medium transition cursor-pointer">🖥️ Mesa Escritório</button>
+                    <button data-label="balcão recepção" onclick="addObject('reception')" class="item-btn py-1.5 px-2 bg-cyan-950/40 hover:bg-cyan-900/40 border border-cyan-800/60 rounded-xl text-[11px] font-medium text-cyan-200 transition cursor-pointer">🏥 Balcão Recepção</button>
+                    <button data-label="vaso sanitário" onclick="addObject('toilet')" class="item-btn py-1.5 px-2 bg-white/10 hover:bg-white/20 border border-slate-600 rounded-xl text-[11px] font-medium transition cursor-pointer">🚽 Vaso Sanitário</button>
+                    <button data-label="leito hospitalar" onclick="addObject('bed')" class="item-btn py-1.5 px-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-xl text-[11px] font-medium transition cursor-pointer">🛏️ Leito Hospitalar</button>
+                </div>
+            </div>
+            <!-- TI -->
+            <div class="item-cat" data-cat="ti">
+                <p class="text-[9px] font-bold text-emerald-400 tracking-widest mt-1">— TI / INFORMÁTICA</p>
+                <div class="grid grid-cols-2 gap-1.5 mt-1">
+                    <button data-label="monitor realista" onclick="addObject('monitor')" class="item-btn py-1.5 px-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-xl text-[11px] font-medium transition cursor-pointer">🖥️ Monitor Realista</button>
+                    <button data-label="cpu gabinete" onclick="addObject('cpu')" class="item-btn py-1.5 px-2 bg-zinc-800 hover:bg-zinc-700 border border-zinc-600 rounded-xl text-[11px] font-medium text-zinc-200 transition cursor-pointer">🖥️ CPU / Gabinete</button>
+                    <button data-label="mini pc gpu" onclick="addObject('miniPc')" class="item-btn py-1.5 px-2 bg-sky-900/40 hover:bg-sky-800/60 border border-sky-700 rounded-xl text-[11px] font-medium text-sky-200 transition cursor-pointer">💻 Mini PC + GPU</button>
+                    <button data-label="impressora" onclick="addObject('printer')" class="item-btn py-1.5 px-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-xl text-[11px] font-medium transition cursor-pointer">🖨️ Impressora</button>
+                </div>
+            </div>
+            <!-- SINALIZAÇÃO -->
+            <div class="item-cat" data-cat="sinal">
+                <p class="text-[9px] font-bold text-emerald-400 tracking-widest mt-1">— SINALIZAÇÃO</p>
+                <div class="grid grid-cols-2 gap-1.5 mt-1">
+                    <button data-label="placa verde braço" onclick="addObject('sign')" class="item-btn py-1.5 px-2 bg-emerald-950/40 hover:bg-emerald-900/40 border border-emerald-800/60 rounded-xl text-[11px] font-medium text-emerald-200 transition cursor-pointer">🟢 Placa com Braço</button>
+                    <button data-label="placa mini setor parede" onclick="addObject('signMini')" class="item-btn py-1.5 px-2 bg-emerald-800 hover:bg-emerald-700 border border-emerald-600 rounded-xl text-[11px] font-medium text-white transition cursor-pointer">🏷️ Placa Mini Setor</button>
+                </div>
+            </div>
+            <button onclick="clearSelection()" class="mt-1 py-1.5 px-2 bg-slate-900 hover:bg-slate-800 border border-slate-700 rounded-xl text-[11px] font-medium transition cursor-pointer w-full">❌ Desselecionar</button>
+        </div>
+
+        <div id="inspector-panel" class="flex flex-col gap-1.5 border-t border-slate-800 pt-2 opacity-50 pointer-events-none transition">
+            <h2 class="text-[10px] font-semibold text-slate-300 uppercase tracking-wider">Inspetor & Modificação</h2>
+            <p id="selected-object-name" class="text-[11px] text-sky-400 font-medium truncate">Nenhum objeto selecionado</p>
+            <div class="flex flex-col gap-1">
+                <label class="text-[10px] text-slate-400">Nome / Texto da Placa:</label>
+                <input type="text" id="objNameInput" oninput="updateSelectedName(this.value)" placeholder="Ex: UTI, Recepção..." class="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-[11px] text-slate-200 focus:outline-none focus:border-sky-500">
+            </div>
+            <div class="flex items-center justify-between text-[11px] pt-0.5">
+                <span class="text-slate-400">Cor do Objeto</span>
+                <input type="color" id="objColorPicker" value="#38bdf8" oninput="updateSelectedColor(this.value)" onchange="updateSelectedColor(this.value)" class="w-7 h-7 rounded border-0 cursor-pointer bg-transparent">
+            </div>
+            <div id="ip-panel" class="hidden flex-col gap-1 bg-sky-950/30 rounded-lg p-2 border border-sky-800/50">
+                <label class="text-[10px] text-sky-300 font-semibold">🌐 IP do Equipamento</label>
+                <div class="flex gap-1">
+                    <input type="text" id="ipInput" placeholder="192.168.1.10" class="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-[11px] text-slate-200 focus:outline-none focus:border-sky-500">
+                    <button onclick="updateSelectedIP()" class="px-2 bg-sky-600 hover:bg-sky-500 rounded-lg text-[10px] font-bold text-white">OK</button>
+                </div>
+                <p class="text-[9px] text-slate-500">Aparece como etiqueta no equipamento</p>
+            </div>
+            <div class="text-[10px] text-slate-400 font-semibold pt-0.5">Alterar Tamanho (Escala):</div>
+            <div class="grid grid-cols-3 gap-1">
+                <div><span class="text-[9px] text-slate-500">Largura (X)</span><input type="range" id="scaleXInput" min="0.2" max="10.0" step="0.1" value="1.0" oninput="updateSelectedScale()" class="w-full accent-sky-500"></div>
+                <div><span class="text-[9px] text-slate-500">Altura (Y)</span><input type="range" id="scaleYInput" min="0.2" max="10.0" step="0.1" value="1.0" oninput="updateSelectedScale()" class="w-full accent-sky-500"></div>
+                <div><span class="text-[9px] text-slate-500">Profundidade (Z)</span><input type="range" id="scaleZInput" min="0.2" max="10.0" step="0.1" value="1.0" oninput="updateSelectedScale()" class="w-full accent-sky-500"></div>
+            </div>
+            <div class="text-[10px] text-slate-400 font-semibold pt-0.5">Rotação Y:</div>
+            <input type="range" id="rotYInput" min="0" max="360" value="0" oninput="updateSelectedRotation(this.value)" class="w-full accent-sky-500">
+            <div class="text-[10px] text-slate-400 font-semibold pt-0.5">Movimentação Vertical:</div>
+            <div class="grid grid-cols-2 gap-1.5">
+                <button onclick="moveSelectedVertical(0.5)" class="py-1.5 bg-emerald-700 hover:bg-emerald-600 text-white rounded-lg text-xs font-bold transition cursor-pointer">⬆ Subir (+0.5m)</button>
+                <button onclick="moveSelectedVertical(-0.5)" class="py-1.5 bg-rose-700 hover:bg-rose-600 text-white rounded-lg text-xs font-bold transition cursor-pointer">⬇ Descer (-0.5m)</button>
+            </div>
+            <div class="text-[10px] text-slate-400 font-semibold pt-0.5">Movimentação por Eixos:</div>
+            <div class="grid grid-cols-3 gap-1">
+                <button onclick="moveSelected('x', -1)" class="py-1 bg-slate-800 hover:bg-slate-700 rounded text-[11px] font-bold">X (-)</button>
+                <button onclick="moveSelected('y', 0.5)" class="py-1 bg-sky-950 hover:bg-sky-900 text-sky-300 rounded text-[11px] font-bold">Y (+)</button>
+                <button onclick="moveSelected('x', 1)" class="py-1 bg-slate-800 hover:bg-slate-700 rounded text-[11px] font-bold">X (+)</button>
+            </div>
+            <div class="grid grid-cols-3 gap-1">
+                <button onclick="moveSelected('z', -1)" class="py-1 bg-slate-800 hover:bg-slate-700 rounded text-[11px] font-bold">Z (-)</button>
+                <button onclick="moveSelected('y', -0.5)" class="py-1 bg-sky-950 hover:bg-sky-900 text-sky-300 rounded text-[11px] font-bold">Y (-)</button>
+                <button onclick="moveSelected('z', 1)" class="py-1 bg-slate-800 hover:bg-slate-700 rounded text-[11px] font-bold">Z (+)</button>
+            </div>
+            <button onclick="deleteSelectedObject()" class="w-full mt-1 py-1 bg-rose-600/30 hover:bg-rose-600/50 text-rose-300 border border-rose-500/30 rounded-lg text-[11px] font-medium transition cursor-pointer">🗑️ Excluir Objeto</button>
+        </div>
+    </div>
+
+    <div id="toast" class="absolute bottom-6 left-1/2 -translate-x-1/2 bg-slate-900/95 border border-slate-700 text-slate-200 px-4 py-2 rounded-xl text-xs shadow-2xl transition-all duration-300 opacity-0 pointer-events-none z-20">Ação realizada!</div>
+    <div id="canvas-container"></div>
+
+    <script>
+        let scene, camera, renderer, orbitControls, gridHelper, infiniteFloor;
+        let currentMode = 'editor';
+        let currentFloor = 0;
+        let floorHeight = 4.5;
+        let walkSpeed = 18;
+        let floors = { 0: { name: "Térreo", objects: [] }, 1: { name: "2º Andar", objects: [] } };
+        let selectedObject = null;
+        let raycaster = new THREE.Raycaster();
+        let mouse = new THREE.Vector2();
+        let isDraggingObject = false;
+        let dragOffset = new THREE.Vector3();
+        let dragPlane = new THREE.Plane();
+        let hoverObject = null;
+        let moveForward=false, moveBackward=false, moveLeft=false, moveRight=false;
+        let prevTime = performance.now();
+        let velocity = new THREE.Vector3();
+        let direction = new THREE.Vector3();
+        let isDraggingSV = false;
+        let previousMousePosition = { x: 0, y: 0 };
+        let euler = new THREE.Euler(0, 0, 0, 'YXZ');
+
+        init();
+        animate();
+
+        function init() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x020617);
+            scene.fog = new THREE.FogExp2(0x020617, 0.0022);
+
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 5000);
+            camera.position.set(0, 25, 45);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: "high-performance", logarithmicDepthBuffer: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            renderer.outputEncoding = THREE.sRGBEncoding;
+            renderer.toneMapping = THREE.ACESFilmicToneMapping;
+            renderer.toneMappingExposure = 1.1;
+            document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+            orbitControls = new THREE.OrbitControls(camera, renderer.domElement);
+            orbitControls.enableDamping = true;
+            orbitControls.dampingFactor = 0.06;
+            orbitControls.maxPolarAngle = Math.PI / 2 - 0.02;
+            orbitControls.minDistance = 2;
+            orbitControls.maxDistance = 800;
+
+            // Iluminação melhorada
+            scene.add(new THREE.HemisphereLight(0xffffff, 0x0a1a2f, 0.6));
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.75);
+            scene.add(ambientLight);
+            const dirLight = new THREE.DirectionalLight(0xffffff, 0.85);
+            dirLight.position.set(80, 120, 60);
+            dirLight.castShadow = true;
+            dirLight.shadow.mapSize.set(4096,4096);
+            dirLight.shadow.camera.near = 0.5; dirLight.shadow.camera.far = 600;
+            dirLight.shadow.camera.left=-200; dirLight.shadow.camera.right=200; dirLight.shadow.camera.top=200; dirLight.shadow.camera.bottom=-200;
+            dirLight.shadow.bias = -0.0005;
+            scene.add(dirLight);
+            const fillLight = new THREE.DirectionalLight(0x93c5fd, 0.35);
+            fillLight.position.set(-60, 40, -40);
+            scene.add(fillLight);
+
+            // MAPA INFINITO: chão cinza marcado com quadradinhos (textura procedural + grade)
+            function createInfiniteFloorTexture(){
+                const size=512;
+                const c=document.createElement('canvas'); c.width=size; c.height=size;
+                const ctx=c.getContext('2d');
+                // base cinza
+                ctx.fillStyle='#1e293b'; ctx.fillRect(0,0,size,size);
+                // quadradinhos 1m = 64px (512/8) -> 8x8 squares por tile
+                const cells=8; const step=size/cells;
+                // linhas finas do grid
+                ctx.strokeStyle='rgba(148,163,184,0.38)'; ctx.lineWidth=2;
+                for(let i=0;i<=cells;i++){
+                    ctx.beginPath(); ctx.moveTo(i*step,0); ctx.lineTo(i*step,size); ctx.stroke();
+                    ctx.beginPath(); ctx.moveTo(0,i*step); ctx.lineTo(size,i*step); ctx.stroke();
+                }
+                // cruz central mais forte a cada 4m
+                ctx.strokeStyle='rgba(56,189,248,0.22)'; ctx.lineWidth=3;
+                for(let i=0;i<=cells;i+=4){
+                    ctx.beginPath(); ctx.moveTo(i*step,0); ctx.lineTo(i*step,size); ctx.stroke();
+                    ctx.beginPath(); ctx.moveTo(0,i*step); ctx.lineTo(size,i*step); ctx.stroke();
+                }
+                const tex=new THREE.CanvasTexture(c);
+                tex.wrapS=tex.wrapT=THREE.RepeatWrapping;
+                tex.repeat.set(10000/8, 10000/8); // cada quadradinho = 1m no mundo
+                tex.encoding=THREE.sRGBEncoding;
+                tex.anisotropy=renderer.capabilities.getMaxAnisotropy();
+                return tex;
+            }
+            const floorGeo = new THREE.PlaneGeometry(10000, 10000);
+            const floorTex = createInfiniteFloorTexture();
+            const floorMat = new THREE.MeshStandardMaterial({ map: floorTex, roughness: 0.88, metalness: 0.03 });
+            floorMat.polygonOffset = true; floorMat.polygonOffsetFactor = 1; floorMat.polygonOffsetUnits = 1;
+            infiniteFloor = new THREE.Mesh(floorGeo, floorMat);
+            infiniteFloor.rotation.x = -Math.PI/2;
+            infiniteFloor.position.y = -0.25;
+            infiniteFloor.receiveShadow = true;
+            infiniteFloor.userData = { type: 'infiniteFloor' };
+            scene.add(infiniteFloor);
+
+            gridHelper = new THREE.GridHelper(10000, 1000, 0x38bdf8, 0x334155);
+            gridHelper.position.y = 0.015;
+            gridHelper.material.opacity=0.22; gridHelper.material.transparent=true;
+            scene.add(gridHelper);
+
+            // Laje do andar atual (pequena marcação central)
+            createFloorSlab(0);
+
+            buildInitialHospitalLayout();
+
+            // Eventos drag melhorados: pointer events com offset
+            renderer.domElement.addEventListener('pointerdown', onPointerDown);
+            renderer.domElement.addEventListener('pointermove', onPointerMove);
+            renderer.domElement.addEventListener('pointerup', onPointerUp);
+            renderer.domElement.addEventListener('pointerleave', onPointerUp);
+            // Hover feedback
+            renderer.domElement.addEventListener('mousemove', onHover);
+
+            document.addEventListener('keydown', (e) => {
+                if(currentMode!=='streetview') return;
+                switch(e.code){ case 'KeyW':case 'ArrowUp': moveForward=true; break; case 'KeyS':case 'ArrowDown': moveBackward=true; break; case 'KeyA':case 'ArrowLeft': moveLeft=true; break; case 'KeyD':case 'ArrowRight': moveRight=true; break; }
+            });
+            document.addEventListener('keyup', (e) => {
+                if(currentMode!=='streetview') return;
+                switch(e.code){ case 'KeyW':case 'ArrowUp': moveForward=false; break; case 'KeyS':case 'ArrowDown': moveBackward=false; break; case 'KeyA':case 'ArrowLeft': moveLeft=false; break; case 'KeyD':case 'ArrowRight': moveRight=false; break; }
+                if(e.code==='ShiftLeft' || e.code==='ShiftRight'){ isDraggingObject=false; }
+            });
+            renderer.domElement.addEventListener('mousedown', (e) => {
+                if(currentMode==='streetview' && !isDraggingObject){ isDraggingSV=true; previousMousePosition={x:e.clientX,y:e.clientY}; }
+            });
+            renderer.domElement.addEventListener('mousemove', (e) => {
+                if(currentMode==='streetview' && isDraggingSV){
+                    const deltaX=e.clientX-previousMousePosition.x; const deltaY=e.clientY-previousMousePosition.y;
+                    euler.setFromQuaternion(camera.quaternion);
+                    euler.y-=deltaX*0.003; euler.x-=deltaY*0.003;
+                    euler.x=Math.max(-Math.PI/2.2, Math.min(Math.PI/2.2, euler.x));
+                    camera.quaternion.setFromEuler(euler);
+                    previousMousePosition={x:e.clientX,y:e.clientY};
+                }
+            });
+            window.addEventListener('mouseup', ()=>{ isDraggingSV=false; });
+            window.addEventListener('resize', onWindowResize);
+        }
+
+        function buildInitialHospitalLayout(){
+            createCustomObject('wall', 0, 1.5, -25, 30, 3, 0.4, 0x94a3b8, "Corredor Principal Norte");
+            createCustomObject('door', -4, 1.5, -24.8, 1.4, 3, 0.3, 0x5c3a21, "Porta Entrada Ala");
+            createCustomObject('sign', 0, 3.2, -24.6, 4.0, 0.8, 0.2, 0x10b981, "Recepção Central");
+            createCustomObject('desk', 0, 0.75, -15, 4, 1.2, 1.5, 0x334155, "Balcão Atendimento");
+            createCustomObject('bed', -10, 0.4, -10, 2.0, 0.8, 1.2, 0x38bdf8, "UTI Leito 01");
+        }
+        function createFloorSlab(floorIndex){
+            const yPos = floorIndex* floorHeight;
+            // Laje decorativa central 60x60 - agora 3cm ACIMA do chão infinito para eliminar piscar (z-fighting)
+            const decoMat = new THREE.MeshStandardMaterial({color:0x0f172a, roughness:0.9});
+            decoMat.polygonOffset = true; decoMat.polygonOffsetFactor = -1; decoMat.polygonOffsetUnits = -1;
+            const deco = new THREE.Mesh(new THREE.BoxGeometry(60,0.06,60), decoMat);
+            deco.position.set(0, yPos+0.03, 0);
+            deco.receiveShadow=true;
+            deco.userData={type:'floorDeco', floorIndex};
+            scene.add(deco);
+            infiniteFloor.position.y = yPos -0.25;
+            gridHelper.position.y = yPos +0.015;
+            if(!floors[floorIndex]) floors[floorIndex]={name:`${floorIndex}º Andar`, objects:[]};
+            floors[floorIndex].objects.push(deco);
+        }
+        function changeFloor(floorIndex){
+            currentFloor=floorIndex;
+            if(!floors[currentFloor]){ floors[currentFloor]={name:`${currentFloor}º Andar`, objects:[]}; createFloorSlab(currentFloor); }
+            document.getElementById('current-floor-label').innerText=`${currentFloor===0?'Térreo':currentFloor+'º Andar'} (${currentFloor* floorHeight}m)`;
+            // move chão infinito para altura do andar - com gap anti z-fighting
+            infiniteFloor.position.y = (currentFloor* floorHeight)-0.25;
+            gridHelper.position.y = (currentFloor* floorHeight)+0.015;
+            if(currentMode==='streetview') camera.position.y=(currentFloor* floorHeight)+1.7;
+            updateObjectsVisibility();
+            showToast(`Pavimento: ${currentFloor===0?'Térreo':currentFloor+'º Andar'}`);
+        }
+        function addNewFloor(){
+            const nextFloorIndex = Object.keys(floors).length;
+            floors[nextFloorIndex]={name:`${nextFloorIndex}º Andar`, objects:[]};
+            createFloorSlab(nextFloorIndex);
+            changeFloor(nextFloorIndex);
+            showToast(`Novo ${nextFloorIndex}º Andar!`);
+        }
+        function toggleGrid(show){ gridHelper.visible = show; }
+        function filterItems(q){
+            const term=q.toLowerCase().trim();
+            document.querySelectorAll('.item-btn').forEach(btn=>{
+                const label=btn.getAttribute('data-label')||btn.innerText.toLowerCase();
+                btn.style.display = term==='' || label.includes(term) ? '' : 'none';
+            });
+        }
+        function addObject(type, variant){
+            let w=2,h=3,d=2,color=0x38bdf8,name="Novo Objeto";
+            if(type==='wall'){ w=10;h=3;d=0.4;color=0x94a3b8;name="Parede Reta"; }
+            else if(type==='floorTile'){
+                w=4;h=0.15;d=4;
+                if(variant==='graniteExotic'){ color=0xd4a574; name="Piso Granito Exótico"; }
+                else if(variant==='graniteBlack'){ color=0x1a1a1e; name="Piso São Gabriel Preto"; }
+                else if(variant==='graniteGreen'){ color=0x1a3a2a; name="Piso Verde Ubatuba"; }
+                else { color=0xf5f0e6; name="Piso Cerâmica 60x60"; }
+                // guarda variante para textura
+                window._lastFloorVariant=variant||'ceramic';
+            }
+            else if(type==='windowGlass'){ w=2.4;h=1.6;d=0.08;color=0xe2e8f0;name="Janela Panorâmica"; }
+            else if(type==='door'){ w=1.4;h=3;d=0.3;color=0x5c3a21;name="Porta Madeira"; }
+            else if(type==='chair'){ w=0.62;h=1.02;d=0.62;color=0x1e293b;name="Cadeira Escritório"; }
+            else if(type==='officeDesk'){ w=1.6;h=0.75;d=0.80;color=0x8b5a2b;name="Mesa Escritório"; }
+            else if(type==='reception'){ w=3.2;h=1.10;d=0.75;color=0x0e7490;name="Balcão Recepção"; }
+            else if(type==='toilet'){ w=0.52;h=0.82;d=0.72;color=0xf8fafc;name="Vaso Sanitário"; }
+            else if(type==='desk'){ w=1.6;h=0.75;d=0.80;color=0x334155;name="Mesa Escritório"; }
+            else if(type==='printer'){ w=0.7;h=0.45;d=0.6;color=0xe2e8f0;name="Impressora Laser"; }
+            else if(type==='monitor'){ w=0.9;h=0.65;d=0.12;color=0x0f172a;name="Monitor 24\""; }
+            else if(type==='cpu'){ w=0.22;h=0.48;d=0.45;color=0x18181b;name="Gabinete CPU"; }
+            else if(type==='miniPc'){ w=0.20;h=0.20;d=0.22;color=0x0f172a;name="Mini PC Compacto"; }
+            else if(type==='sign'){ w=3.0;h=0.8;d=0.2;color=0x10b981;name="Placa Verde Setor"; }
+            else if(type==='bed'){ w=1.8;h=0.8;d=1.0;color=0x38bdf8;name="Leito Hospitalar"; }
+            else if(type==='column'){ w=0.8;h=3;d=0.8;color=0xf59e0b;name="Coluna Pilar"; }
+            // altura Y: se piso, fica rente ao chão
+            let yPos;
+            if(type==='floorTile') yPos=(currentFloor* floorHeight)+0.01;
+            else yPos=(currentFloor* floorHeight)+(h/2);
+            let spawnX=0, spawnZ=-5;
+            if(currentMode==='streetview'){
+                const dir=new THREE.Vector3(); camera.getWorldDirection(dir);
+                spawnX=camera.position.x+dir.x*6; spawnZ=camera.position.z+dir.z*6;
+                if(type!=='floorTile') yPos=(currentFloor* floorHeight)+(h/2);
+            }
+            createCustomObject(type, spawnX, yPos, spawnZ, w,h,d,color,name);
+            showToast(`${name} adicionado! Segure e arraste!`);
+        }
+
+        function createChairGroup(w,h,d,colorHex){
+            const g=new THREE.Group();
+            const fabric=new THREE.Color(colorHex);
+            const fabricMat=new THREE.MeshStandardMaterial({color:fabric, roughness:0.82, metalness:0.02});
+            const darkMat=new THREE.MeshStandardMaterial({color:0x0f172a, roughness:0.4, metalness:0.12});
+            const metalMat=new THREE.MeshStandardMaterial({color:0x94a3b8, metalness:0.65, roughness:0.28});
+            // assento
+            const seat=new THREE.Mesh(new THREE.BoxGeometry(0.46,0.08,0.46), fabricMat);
+            seat.position.set(0,-h*0.18,0); seat.castShadow=true; seat.receiveShadow=true; seat.userData.paintable=true; g.add(seat);
+            // encosto
+            const back=new THREE.Mesh(new THREE.BoxGeometry(0.46,0.52,0.06), fabricMat);
+            back.position.set(0,h*0.12, -0.21); back.castShadow=true; back.userData.paintable=true; g.add(back);
+            // apoio lombar
+            const lumbar=new THREE.Mesh(new THREE.BoxGeometry(0.42,0.14,0.04), new THREE.MeshStandardMaterial({color:fabric.clone().multiplyScalar(0.88), roughness:0.85}));
+            lumbar.position.set(0,-h*0.02,-0.18); lumbar.userData.paintable=true; g.add(lumbar);
+            // braços
+            const armMat=new THREE.MeshStandardMaterial({color:0x1e293b, roughness:0.6});
+            [-1,1].forEach(s=>{
+                const armV=new THREE.Mesh(new THREE.CylinderGeometry(0.022,0.022,0.32,12), metalMat);
+                armV.position.set(s*0.24, -h*0.02, 0.02); armV.userData.paintable=false; g.add(armV);
+                const armH=new THREE.Mesh(new THREE.BoxGeometry(0.08,0.025,0.30), armMat);
+                armH.position.set(s*0.24, h*0.14, 0.02); armH.castShadow=true; armH.userData.paintable=false; g.add(armH);
+            });
+            // pistão e base
+            const piston=new THREE.Mesh(new THREE.CylinderGeometry(0.035,0.035,0.28,12), metalMat);
+            piston.position.set(0,-h*0.38,0); piston.userData.paintable=false; g.add(piston);
+            const hub=new THREE.Mesh(new THREE.CylinderGeometry(0.065,0.065,0.03,16), darkMat);
+            hub.position.set(0,-h*0.49,0); hub.userData.paintable=false; g.add(hub);
+            // 5 pernas
+            for(let i=0;i<5;i++){
+                const ang=i*Math.PI*2/5;
+                const leg=new THREE.Mesh(new THREE.BoxGeometry(0.03,0.02,0.28), metalMat);
+                leg.position.set(Math.cos(ang)*0.14, -h*0.49, Math.sin(ang)*0.14);
+                leg.rotation.y=-ang; leg.userData.paintable=false; g.add(leg);
+                const wheel=new THREE.Mesh(new THREE.CylinderGeometry(0.038,0.038,0.022,12), new THREE.MeshStandardMaterial({color:0x020617, roughness:0.9}));
+                wheel.rotation.z=Math.PI/2; wheel.position.set(Math.cos(ang)*0.27, -h*0.495, Math.sin(ang)*0.27); wheel.userData.paintable=false; g.add(wheel);
+            }
+            return g;
+        }
+        function createOfficeDeskGroup(w,h,d,colorHex){
+            const g=new THREE.Group();
+            const wood=new THREE.Color(colorHex);
+            const woodMat=new THREE.MeshStandardMaterial({color:wood, roughness:0.55, metalness:0.04});
+            const darkWood=new THREE.MeshStandardMaterial({color:wood.clone().multiplyScalar(0.62), roughness:0.6});
+            // tampo
+            const top=new THREE.Mesh(new THREE.BoxGeometry(w,0.05,d), woodMat);
+            top.position.set(0,h*0.46,0); top.castShadow=true; top.receiveShadow=true; top.userData.paintable=true; g.add(top);
+            // borda frontal
+            const edge=new THREE.Mesh(new THREE.BoxGeometry(w,0.03,d+0.02), darkWood);
+            edge.position.set(0,h*0.43,0); edge.userData.paintable=false; g.add(edge);
+            // gaveteiro lateral (3 gavetas)
+            const cabinet=new THREE.Mesh(new THREE.BoxGeometry(w*0.32, h*0.82, d*0.88), woodMat);
+            cabinet.position.set(w*0.32, -h*0.06, 0); cabinet.castShadow=true; cabinet.userData.paintable=true; g.add(cabinet);
+            for(let i=0;i<3;i++){
+                const drawer=new THREE.Mesh(new THREE.BoxGeometry(w*0.28,0.16,0.02), darkWood);
+                drawer.position.set(w*0.32, h*0.22 - i*0.20, d*0.445); drawer.userData.paintable=false; g.add(drawer);
+                const handle=new THREE.Mesh(new THREE.BoxGeometry(0.10,0.012,0.012), new THREE.MeshStandardMaterial({color:0xcbd5e1, metalness:0.7, roughness:0.25}));
+                handle.position.set(w*0.32, h*0.22 - i*0.20, d*0.46); handle.userData.paintable=false; g.add(handle);
+            }
+            // pernas
+            const legMat=new THREE.MeshStandardMaterial({color:0x1e293b, roughness:0.45});
+            [[-w*0.46,-d*0.38],[ -w*0.46, d*0.38],[w*0.12,-d*0.38],[w*0.12,d*0.38]].forEach(p=>{
+                if(p[0]>0) return; // lado do gaveteiro não tem perna
+                const leg=new THREE.Mesh(new THREE.BoxGeometry(0.045, h*0.88, 0.045), legMat);
+                leg.position.set(p[0], -h*0.06, p[1]); leg.castShadow=true; leg.userData.paintable=false; g.add(leg);
+            });
+            const leg2=new THREE.Mesh(new THREE.BoxGeometry(0.045, h*0.88, 0.045), legMat);
+            leg2.position.set(w*0.12, -h*0.06, -d*0.38); leg2.castShadow=true; leg2.userData.paintable=false; g.add(leg2);
+            const leg3=new THREE.Mesh(new THREE.BoxGeometry(0.045, h*0.88, 0.045), legMat);
+            leg3.position.set(w*0.12, -h*0.06, d*0.38); leg3.castShadow=true; leg3.userData.paintable=false; g.add(leg3);
+            // travessa
+            const beam=new THREE.Mesh(new THREE.BoxGeometry(w*0.60,0.06,0.04), legMat);
+            beam.position.set(-w*0.14,-h*0.22,0); beam.userData.paintable=false; g.add(beam);
+            return g;
+        }
+        function createReceptionGroup(w,h,d,colorHex){
+            const g=new THREE.Group();
+            const baseColor=new THREE.Color(colorHex);
+            const frontMat=new THREE.MeshStandardMaterial({color:baseColor, roughness:0.55});
+            const topMat=new THREE.MeshStandardMaterial({color:0xf8fafc, roughness:0.35});
+            const darkMat=new THREE.MeshStandardMaterial({color:baseColor.clone().multiplyScalar(0.45), roughness:0.6});
+            // corpo principal (frente alta)
+            const body=new THREE.Mesh(new THREE.BoxGeometry(w, h*0.88, d*0.95), frontMat);
+            body.position.set(0,-h*0.06,0); body.castShadow=true; body.receiveShadow=true; body.userData.paintable=true; g.add(body);
+            // tampo
+            const top=new THREE.Mesh(new THREE.BoxGeometry(w+0.08,0.06,d+0.12), topMat);
+            top.position.set(0,h*0.42,0.02); top.castShadow=true; top.receiveShadow=true; top.userData.paintable=false; g.add(top);
+            // balcão superior (apoio)
+            const counter=new THREE.Mesh(new THREE.BoxGeometry(w*0.92,0.04,d*0.30), topMat);
+            counter.position.set(0,h*0.22, d*0.32); counter.userData.paintable=false; g.add(counter);
+            // painel frontal decorativo branco
+            const panel=new THREE.Mesh(new THREE.BoxGeometry(w*0.78, h*0.42, 0.02), new THREE.MeshStandardMaterial({color:0xffffff, roughness:0.5}));
+            panel.position.set(0,-h*0.06, d*0.49); panel.userData.paintable=false; g.add(panel);
+            // logo hospital no painel
+            const logoCanvas=document.createElement('canvas'); logoCanvas.width=512; logoCanvas.height=128;
+            const lctx=logoCanvas.getContext('2d'); lctx.fillStyle='#ffffff'; lctx.fillRect(0,0,512,128);
+            lctx.fillStyle=baseColor.getStyle(); lctx.font='bold 42px Inter, sans-serif'; lctx.textAlign='center'; lctx.textBaseline='middle'; lctx.fillText('RECEPÇÃO',256,64);
+            const logoTex=new THREE.CanvasTexture(logoCanvas); logoTex.encoding=THREE.sRGBEncoding;
+            const logoPlane=new THREE.Mesh(new THREE.PlaneGeometry(w*0.55,0.22), new THREE.MeshStandardMaterial({map:logoTex, roughness:0.4}));
+            logoPlane.position.set(0,-h*0.06, d*0.502); logoPlane.userData.paintable=false; g.add(logoPlane);
+            // rodapé iluminado
+            const glow=new THREE.Mesh(new THREE.BoxGeometry(w*0.96,0.06, d*0.98), new THREE.MeshStandardMaterial({color:0x38bdf8, emissive:0x38bdf8, emissiveIntensity:0.55}));
+            glow.position.set(0,-h*0.48,0); glow.userData.paintable=false; g.add(glow);
+            // lateral com passagem
+            const sideTrim=new THREE.Mesh(new THREE.BoxGeometry(0.04, h*0.88, d), darkMat);
+            sideTrim.position.set(w*0.49,-h*0.06,0); sideTrim.userData.paintable=false; g.add(sideTrim);
+            const sideTrim2=sideTrim.clone(); sideTrim2.position.set(-w*0.49,-h*0.06,0); g.add(sideTrim2);
+            return g;
+        }
+        function createToiletGroup(w,h,d,colorHex){
+            const g=new THREE.Group();
+            const porcelainMat=new THREE.MeshStandardMaterial({color:0xf8fafc, roughness:0.18, metalness:0.02});
+            const seatMat=new THREE.MeshStandardMaterial({color:0xffffff, roughness:0.35});
+            // base / pé
+            const base=new THREE.Mesh(new THREE.CylinderGeometry(0.18,0.20, h*0.42, 20), porcelainMat);
+            base.position.set(0,-h*0.28,0.05); base.castShadow=true; base.receiveShadow=true; base.userData.paintable=true; g.add(base);
+            // bacia
+            const bowl=new THREE.Mesh(new THREE.CylinderGeometry(0.22,0.18,0.18,20), porcelainMat);
+            bowl.position.set(0,-h*0.02,0.04); bowl.castShadow=true; bowl.userData.paintable=true; g.add(bowl);
+            // interior da bacia (água)
+            const water=new THREE.Mesh(new THREE.CircleGeometry(0.14,20), new THREE.MeshStandardMaterial({color:0x38bdf8, transparent:true, opacity:0.55, roughness:0.05}));
+            water.rotation.x=-Math.PI/2; water.position.set(0,-h*0.02,0.04); water.userData.paintable=false; g.add(water);
+            // assento
+            const seat=new THREE.Mesh(new THREE.TorusGeometry(0.15,0.028,10,20), seatMat);
+            seat.rotation.x=Math.PI/2; seat.position.set(0, h*0.06,0.04); seat.castShadow=true; seat.userData.paintable=false; g.add(seat);
+            // tampa levantada (opcional)
+            const lid=new THREE.Mesh(new THREE.CylinderGeometry(0.16,0.16,0.015,20), seatMat);
+            lid.position.set(0, h*0.08, -0.16); lid.rotation.x=0.25; lid.userData.paintable=false; g.add(lid);
+            // caixa acoplada
+            const tank=new THREE.Mesh(new THREE.BoxGeometry(0.42,0.32,0.18), porcelainMat);
+            tank.position.set(0, h*0.30, -0.20); tank.castShadow=true; tank.userData.paintable=true; g.add(tank);
+            // tampa da caixa
+            const tankLid=new THREE.Mesh(new THREE.BoxGeometry(0.44,0.02,0.20), porcelainMat);
+            tankLid.position.set(0, h*0.47, -0.20); tankLid.userData.paintable=false; g.add(tankLid);
+            // botão de descarga cromado
+            const flushBtn=new THREE.Mesh(new THREE.CylinderGeometry(0.032,0.032,0.018,16), new THREE.MeshStandardMaterial({color:0xcbd5e1, metalness:0.85, roughness:0.18}));
+            flushBtn.position.set(0, h*0.49, -0.20); flushBtn.userData.paintable=false; g.add(flushBtn);
+            // tubulação traseira
+            const pipe=new THREE.Mesh(new THREE.CylinderGeometry(0.03,0.03,0.18,12), new THREE.MeshStandardMaterial({color:0xe2e8f0, roughness:0.4}));
+            pipe.position.set(0,h*0.05,-0.32); pipe.userData.paintable=false; g.add(pipe);
+            // parafusos
+            const boltMat=new THREE.MeshStandardMaterial({color:0x94a3b8, metalness:0.7, roughness:0.3});
+            [-0.12,0.12].forEach(x=>{
+                const bolt=new THREE.Mesh(new THREE.CylinderGeometry(0.012,0.012,0.02,10), boltMat);
+                bolt.position.set(x,-h*0.46,0.12); bolt.userData.paintable=false; g.add(bolt);
+            });
+            return g;
+        }
+        function createCeramicTexture(baseHex){
+            const size=512;
+            const c=document.createElement('canvas'); c.width=size; c.height=size;
+            const ctx=c.getContext('2d');
+            const base = new THREE.Color(baseHex).getStyle();
+            // fundo cerâmica clara
+            ctx.fillStyle=base; ctx.fillRect(0,0,size,size);
+            // variação sutil marmorizada
+            ctx.fillStyle='rgba(180,160,130,0.07)';
+            for(let i=0;i<120;i++){ const x=Math.random()*size, y=Math.random()*size, r= 8+Math.random()*18; ctx.beginPath(); ctx.ellipse(x,y,r,r*0.7, Math.random()*Math.PI,0,Math.PI*2); ctx.fill(); }
+            // rejunte
+            ctx.strokeStyle='rgba(160,150,135,0.85)'; ctx.lineWidth=6;
+            const tiles=2; const step=size/tiles;
+            for(let i=0;i<=tiles;i++){ ctx.beginPath(); ctx.moveTo(i*step,0); ctx.lineTo(i*step,size); ctx.stroke(); ctx.beginPath(); ctx.moveTo(0,i*step); ctx.lineTo(size,i*step); ctx.stroke(); }
+            // brilho central de cada cerâmica
+            ctx.fillStyle='rgba(255,255,255,0.045)';
+            for(let x=0;x<tiles;x++) for(let y=0;y<tiles;y++){ ctx.beginPath(); ctx.ellipse(x*step+step*0.5, y*step+step*0.35, step*0.28, step*0.18, 0,0,Math.PI*2); ctx.fill(); }
+            const tex=new THREE.CanvasTexture(c); tex.wrapS=tex.wrapT=THREE.RepeatWrapping; tex.encoding=THREE.sRGBEncoding; tex.anisotropy=renderer.capabilities.getMaxAnisotropy(); tex.repeat.set(1,1);
+            return tex;
+        }
+
+        function createMonitorGroup(w,h,d,colorHex,name){
+            const group=new THREE.Group();
+            const bezelMat=new THREE.MeshStandardMaterial({color:0x0f172a, roughness:0.35, metalness:0.12});
+            const backMat=new THREE.MeshStandardMaterial({color:0x1e293b, roughness:0.5});
+            // moldura
+            const frame=new THREE.Mesh(new THREE.BoxGeometry(w,h,0.04), bezelMat);
+            frame.castShadow=true; frame.userData.paintable=true; group.add(frame);
+            // traseira levemente mais grossa
+            const back=new THREE.Mesh(new THREE.BoxGeometry(w*0.98,h*0.97,0.06), backMat);
+            back.position.z=-0.045; back.userData.paintable=false; group.add(back);
+            // tela
+            const screenW=w*0.92, screenH=h*0.82;
+            const canvas=document.createElement('canvas'); canvas.width=512; canvas.height=320;
+            const ctx=canvas.getContext('2d');
+            ctx.fillStyle='#0ea5e9'; ctx.fillRect(0,0,512,320);
+            ctx.fillStyle='#e0f2fe'; ctx.fillRect(12,14,488, 28);
+            ctx.fillStyle='#0f172a'; ctx.font='bold 22px Inter, sans-serif'; ctx.fillText('Hospital System',18,32);
+            ctx.fillStyle='rgba(255,255,255,0.95)'; ctx.font='13px Inter, sans-serif';
+            ctx.fillText('Paciente:  João Silva  •  Leito 01',18,68); ctx.fillText('Sinais vitais estáveis  •  09:42',18,90);
+            ctx.fillStyle='#38bdf8'; ctx.fillRect(18,120, 140, 70); ctx.fillStyle='#22c55e'; ctx.fillRect(172,120, 140, 70); ctx.fillStyle='#f59e0b'; ctx.fillRect(326,120, 140, 70);
+            ctx.fillStyle='rgba(15,23,42,0.08)'; for(let i=0;i<320;i+=4){ ctx.fillRect(0,i,512,1); } // scanlines
+            const screenTex=new THREE.CanvasTexture(canvas); screenTex.encoding=THREE.sRGBEncoding; screenTex.anisotropy=renderer.capabilities.getMaxAnisotropy();
+            const screenMat=new THREE.MeshStandardMaterial({map:screenTex, emissive:0x0ea5e9, emissiveIntensity:0.18, roughness:0.2, metalness:0.05});
+            const screen=new THREE.Mesh(new THREE.PlaneGeometry(screenW,screenH), screenMat);
+            screen.position.set(0, h*0.04, 0.022); screen.userData.paintable=false; group.add(screen);
+            // brilho de vidro
+            const glass=new THREE.Mesh(new THREE.PlaneGeometry(screenW,screenH), new THREE.MeshStandardMaterial({color:0xffffff, transparent:true, opacity:0.06, roughness:0.05}));
+            glass.position.set(0,h*0.04,0.023); glass.userData.paintable=false; group.add(glass);
+            // logotipo inferior
+            const logo=new THREE.Mesh(new THREE.BoxGeometry(0.12,0.02,0.005), new THREE.MeshStandardMaterial({color:0x334155}));
+            logo.position.set(0,-h*0.42,0.025); logo.userData.paintable=false; group.add(logo);
+            // botão power + led
+            const btn=new THREE.Mesh(new THREE.CylinderGeometry(0.018,0.018,0.008,12), new THREE.MeshStandardMaterial({color:0x38bdf8, emissive:0x38bdf8, emissiveIntensity:0.9}));
+            btn.rotation.x=Math.PI/2; btn.position.set(w*0.42,-h*0.42,0.025); btn.userData.paintable=false; group.add(btn);
+            // haste
+            const stem=new THREE.Mesh(new THREE.BoxGeometry(0.08,0.18,0.08), new THREE.MeshStandardMaterial({color:0x334155, roughness:0.4}));
+            stem.position.set(0,-h*0.5-0.09, -0.02); stem.userData.paintable=false; group.add(stem);
+            // base / pé
+            const base=new THREE.Mesh(new THREE.BoxGeometry(w*0.55,0.02,0.28), new THREE.MeshStandardMaterial({color:0x1e293b, roughness:0.5}));
+            base.position.set(0,-h*0.5-0.18,0.02); base.receiveShadow=true; base.userData.paintable=false; group.add(base);
+            return group;
+        }
+
+        function createCpuGroup(w,h,d,colorHex,name){
+            const group=new THREE.Group();
+            const caseMat=new THREE.MeshStandardMaterial({color: new THREE.Color(colorHex), roughness:0.42, metalness:0.18});
+            const body=new THREE.Mesh(new THREE.BoxGeometry(w,h,d), caseMat);
+            body.castShadow=true; body.receiveShadow=true; body.userData.paintable=true; group.add(body);
+            // frente levemente destacada
+            const front=new THREE.Mesh(new THREE.BoxGeometry(w*0.98,h*0.98,0.02), new THREE.MeshStandardMaterial({color:0x27272a, roughness:0.5}));
+            front.position.z=d*0.51; front.userData.paintable=false; group.add(front);
+            // faixa frontal
+            const stripe=new THREE.Mesh(new THREE.BoxGeometry(w*0.98,0.04,0.025), new THREE.MeshStandardMaterial({color:0x3f3f46}));
+            stripe.position.set(0,h*0.22,d*0.525); stripe.userData.paintable=false; group.add(stripe);
+            // botão power grande com led
+            const powerBtn=new THREE.Mesh(new THREE.CylinderGeometry(0.032,0.032,0.015,16), new THREE.MeshStandardMaterial({color:0xe2e8f0, roughness:0.3}));
+            powerBtn.rotation.x=Math.PI/2; powerBtn.position.set(0,h*0.34,d*0.54); powerBtn.userData.paintable=false; group.add(powerBtn);
+            const powerLed=new THREE.Mesh(new THREE.RingGeometry(0.032,0.038,16), new THREE.MeshStandardMaterial({color:0x22c55e, emissive:0x22c55e, emissiveIntensity:1.2, side:THREE.DoubleSide}));
+            powerLed.position.set(0,h*0.34,d*0.545); powerLed.userData.paintable=false; group.add(powerLed);
+            // portas USB
+            const usbMat=new THREE.MeshStandardMaterial({color:0x0a0a0a, roughness:0.8});
+            for(let i=0;i<2;i++){
+                const usb=new THREE.Mesh(new THREE.BoxGeometry(0.05,0.018,0.01), usbMat);
+                usb.position.set(-w*0.18 + i*0.09, h*0.08, d*0.54); usb.userData.paintable=false; group.add(usb);
+                const usbInner=new THREE.Mesh(new THREE.BoxGeometry(0.035,0.008,0.005), new THREE.MeshStandardMaterial({color:0x3b82f6}));
+                usbInner.position.set(-w*0.18 + i*0.09, h*0.08, d*0.546); usbInner.userData.paintable=false; group.add(usbInner);
+            }
+            // audio jacks
+            const jackColors=[0x22c55e,0xec4899,0x3b82f6];
+            jackColors.forEach((c,i)=>{
+                const jack=new THREE.Mesh(new THREE.CylinderGeometry(0.014,0.014,0.012,12), new THREE.MeshStandardMaterial({color:c, roughness:0.4}));
+                jack.rotation.x=Math.PI/2; jack.position.set(0.02 + i*0.035, h*0.01, d*0.54); jack.userData.paintable=false; group.add(jack);
+            });
+            // grelha de ventilação lateral
+            const ventGroup=new THREE.Group();
+            for(let i=0;i<6;i++){
+                const slat=new THREE.Mesh(new THREE.BoxGeometry(0.015, h*0.11, d*0.62), new THREE.MeshStandardMaterial({color:0x18181b}));
+                slat.position.set(w*0.51, -h*0.22 + i*0.068, 0); slat.userData.paintable=false; ventGroup.add(slat);
+            }
+            group.add(ventGroup);
+            // grelha frontal inferior
+            for(let i=0;i<5;i++){
+                const grill=new THREE.Mesh(new THREE.BoxGeometry(w*0.55,0.008,0.015), new THREE.MeshStandardMaterial({color:0x3f3f46}));
+                grill.position.set(0, -h*0.18 - i*0.025, d*0.54); grill.userData.paintable=false; group.add(grill);
+            }
+            // pés de borracha
+            const footMat=new THREE.MeshStandardMaterial({color:0x0a0a0a, roughness:0.9});
+            [[-w*0.35,-d*0.3],[w*0.35,-d*0.3],[-w*0.35,d*0.3],[w*0.35,d*0.3]].forEach(p=>{
+                const foot=new THREE.Mesh(new THREE.CylinderGeometry(0.02,0.02,0.018,10), footMat);
+                foot.position.set(p[0],-h*0.5-0.009,p[1]); foot.userData.paintable=false; group.add(foot);
+            });
+            return group;
+        }
+        function createMiniPcGroup(w,h,d,colorHex){
+            const g=new THREE.Group();
+            const caseCol=new THREE.Color(colorHex);
+            const caseMat=new THREE.MeshStandardMaterial({color:caseCol, roughness:0.38, metalness:0.22});
+            const body=new THREE.Mesh(new THREE.BoxGeometry(w,h,d), caseMat);
+            body.castShadow=true; body.receiveShadow=true; body.userData.paintable=true; g.add(body);
+            // frente mesh perfurada
+            const front=new THREE.Mesh(new THREE.BoxGeometry(w*0.98,h*0.92,0.012), new THREE.MeshStandardMaterial({color:0x0a0a0a, roughness:0.7}));
+            front.position.z=d*0.51; front.userData.paintable=false; g.add(front);
+            // furos de ventilação (pontinhos)
+            for(let r=0;r<4;r++) for(let c=0;c<6;c++){
+                const hole=new THREE.Mesh(new THREE.CylinderGeometry(0.008,0.008,0.014,8), new THREE.MeshStandardMaterial({color:0x1e293b}));
+                hole.rotation.x=Math.PI/2; hole.position.set(-w*0.32 + c*0.12, h*0.28 - r*0.11, d*0.52); hole.userData.paintable=false; g.add(hole);
+            }
+            // power + led fino
+            const pwr=new THREE.Mesh(new THREE.CylinderGeometry(0.02,0.02,0.01,16), new THREE.MeshStandardMaterial({color:0xf1f5f9, roughness:0.3}));
+            pwr.rotation.x=Math.PI/2; pwr.position.set(0, -h*0.36, d*0.53); pwr.userData.paintable=false; g.add(pwr);
+            const led=new THREE.Mesh(new THREE.RingGeometry(0.02,0.024,16), new THREE.MeshStandardMaterial({color:0x38bdf8, emissive:0x38bdf8, emissiveIntensity:1.1, side:THREE.DoubleSide}));
+            led.position.set(0,-h*0.36,d*0.535); led.userData.paintable=false; g.add(led);
+            // USB-C + USB-A + jig
+            const usbC=new THREE.Mesh(new THREE.BoxGeometry(0.032,0.012,0.008), new THREE.MeshStandardMaterial({color:0xcbd5e1, metalness:0.6, roughness:0.3}));
+            usbC.position.set(-w*0.22, -h*0.22, d*0.525); usbC.userData.paintable=false; g.add(usbC);
+            const usbA=new THREE.Mesh(new THREE.BoxGeometry(0.036,0.014,0.008), new THREE.MeshStandardMaterial({color:0x0a0a0a, roughness:0.8}));
+            usbA.position.set(w*0.22, -h*0.22, d*0.525); usbA.userData.paintable=false; g.add(usbA);
+            // GPU pequena low-profile visível na lateral (陷)
+            const gpuGroup=new THREE.Group();
+            const gpuBoard=new THREE.Mesh(new THREE.BoxGeometry(0.015, h*0.55, d*0.62), new THREE.MeshStandardMaterial({color:0x1e40af, roughness:0.4}));
+            gpuBoard.position.set(w*0.5+0.008, 0, 0); gpuBoard.userData.paintable=false; gpuGroup.add(gpuBoard);
+            const gpuFan=new THREE.Mesh(new THREE.CylinderGeometry(0.055,0.055,0.012,16), new THREE.MeshStandardMaterial({color:0x020617, roughness:0.35}));
+            gpuFan.rotation.z=Math.PI/2; gpuFan.position.set(w*0.5+0.016, 0.02, 0.02); gpuFan.userData.paintable=false; gpuGroup.add(gpuFan);
+            const fanHub=new THREE.Mesh(new THREE.CylinderGeometry(0.018,0.018,0.014,16), new THREE.MeshStandardMaterial({color:0x38bdf8, emissive:0x38bdf8, emissiveIntensity:0.6}));
+            fanHub.rotation.z=Math.PI/2; fanHub.position.set(w*0.5+0.022, 0.02, 0.02); fanHub.userData.paintable=false; gpuGroup.add(fanHub);
+            const gpuBracket=new THREE.Mesh(new THREE.BoxGeometry(0.012, h*0.65, 0.02), new THREE.MeshStandardMaterial({color:0x94a3b8, metalness:0.7, roughness:0.25}));
+            gpuBracket.position.set(w*0.5+0.008, 0, -d*0.42); gpuBracket.userData.paintable=false; gpuGroup.add(gpuBracket);
+            g.add(gpuGroup);
+            // pés baixos de silicone
+            const footMat=new THREE.MeshStandardMaterial({color:0x020617, roughness:0.9});
+            [[-w*0.38,-d*0.35],[w*0.38,-d*0.35],[-w*0.38,d*0.35],[w*0.38,d*0.35]].forEach(p=>{
+                const f=new THREE.Mesh(new THREE.CylinderGeometry(0.015,0.015,0.01,10), footMat);
+                f.position.set(p[0], -h*0.5-0.005, p[1]); f.userData.paintable=false; g.add(f);
+            });
+            return g;
+        }
+
+        function createWindowGroup(w,h,d,colorHex){
+            const g=new THREE.Group();
+            const frameCol=new THREE.Color(0xf1f5f9);
+            const frameMat=new THREE.MeshStandardMaterial({color:frameCol, roughness:0.32, metalness:0.28});
+            const frameThick=0.06;
+            // moldura 4 lados fina
+            const top=new THREE.Mesh(new THREE.BoxGeometry(w,frameThick,d), frameMat);
+            top.position.set(0,h/2-frameThick/2,0); top.castShadow=true; top.userData.paintable=true; g.add(top);
+            const bot=new THREE.Mesh(new THREE.BoxGeometry(w,frameThick,d), frameMat);
+            bot.position.set(0,-h/2+frameThick/2,0); bot.castShadow=true; bot.userData.paintable=true; g.add(bot);
+            const left=new THREE.Mesh(new THREE.BoxGeometry(frameThick,h-frameThick*2,d), frameMat);
+            left.position.set(-w/2+frameThick/2,0,0); left.castShadow=true; left.userData.paintable=true; g.add(left);
+            const right=new THREE.Mesh(new THREE.BoxGeometry(frameThick,h-frameThick*2,d), frameMat);
+            right.position.set(w/2-frameThick/2,0,0); right.castShadow=true; right.userData.paintable=true; g.add(right);
+            // vidro único SEM divisória - leve azulado reflexivo
+            const glassGeo=new THREE.PlaneGeometry(w-frameThick*2 -0.02, h-frameThick*2 -0.02);
+            const glassMat=new THREE.MeshPhysicalMaterial({color:0xcffafe, transparent:true, opacity:0.28, roughness:0.04, metalness:0.08, transmission:0.72, thickness:0.02, side:THREE.DoubleSide, envMapIntensity:1.1});
+            const glass=new THREE.Mesh(glassGeo, glassMat);
+            glass.position.set(0,0,d*0.35); glass.userData.paintable=false; g.add(glass);
+            // segundo vidro atrás para duplo reflexo
+            const glass2=glass.clone(); glass2.position.set(0,0,-d*0.35); glass2.userData.paintable=false; g.add(glass2);
+            // brilho/reflexo diagonal
+            const glare=new THREE.Mesh(new THREE.PlaneGeometry((w-frameThick*2)*0.55, (h-frameThick*2)*0.9), new THREE.MeshStandardMaterial({color:0xffffff, transparent:true, opacity:0.07, roughness:0.02, side:THREE.DoubleSide}));
+            glare.position.set(w*0.18, h*0.08, d*0.36); glare.rotation.z=0.18; glare.userData.paintable=false; g.add(glare);
+            // peitoril
+            const sill=new THREE.Mesh(new THREE.BoxGeometry(w+0.12,0.04,0.18), new THREE.MeshStandardMaterial({color:0xe2e8f0, roughness:0.45}));
+            sill.position.set(0,-h/2-0.02,0.04); sill.receiveShadow=true; sill.userData.paintable=false; g.add(sill);
+            // borracha de vedação preta fina
+            const sealMat=new THREE.MeshStandardMaterial({color:0x0f172a, roughness:0.85});
+            const sealT=new THREE.Mesh(new THREE.BoxGeometry(w-frameThick*2,0.012,0.015), sealMat); sealT.position.set(0,h/2-frameThick-0.015,0); sealT.userData.paintable=false; g.add(sealT);
+            const sealB=sealT.clone(); sealB.position.set(0,-h/2+frameThick+0.015,0); g.add(sealB);
+            return g;
+        }
+        function createGraniteTexture(variant, baseHex){
+            const size=512; const c=document.createElement('canvas'); c.width=size; c.height=size; const ctx=c.getContext('2d');
+            let base='#d4a574';
+            if(variant==='graniteExotic'){ base='#c9a86a'; }
+            else if(variant==='graniteBlack'){ base='#0f0f12'; }
+            else if(variant==='graniteGreen'){ base='#1e3a2e'; }
+            else if(variant==='ceramic'){ return createCeramicTexture(baseHex); }
+            ctx.fillStyle=base; ctx.fillRect(0,0,size,size);
+            const speckles = variant==='graniteExotic' ? 900 : variant==='graniteBlack' ? 700 : 600;
+            for(let i=0;i<speckles;i++){
+                const x=Math.random()*size, y=Math.random()*size, r=1+Math.random()*4;
+                let col;
+                if(variant==='graniteExotic'){ const cols=['#8b4513','#2f4f2f','#4a2c17','#d2b48c','#556b2f','#8b0000','#f5deb3']; col=cols[Math.floor(Math.random()*cols.length)]; }
+                else if(variant==='graniteBlack'){ const cols=['#3a3a3c','#d4af37','#5a5a5e','#1a1a1a','#c0c0c0']; col=cols[Math.floor(Math.random()*cols.length)]; }
+                else if(variant==='graniteGreen'){ const cols=['#2d5a27','#8fbc8f','#1a2e1a','#556b2f','#c0d6a4']; col=cols[Math.floor(Math.random()*cols.length)]; }
+                else col='#a0825a';
+                ctx.fillStyle=col; ctx.globalAlpha=0.65+Math.random()*0.35; ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.fill();
+            }
+            ctx.globalAlpha=1;
+            // veios longos exóticos
+            if(variant==='graniteExotic'){
+                ctx.strokeStyle='rgba(60,30,10,0.18)'; ctx.lineWidth=2+(Math.random()*3);
+                for(let i=0;i<6;i++){ ctx.beginPath(); ctx.moveTo(Math.random()*size, Math.random()*size); ctx.bezierCurveTo(Math.random()*size, Math.random()*size, Math.random()*size, Math.random()*size, Math.random()*size, Math.random()*size); ctx.stroke(); }
+            }
+            // rejunte
+            ctx.strokeStyle= variant==='graniteBlack' ? 'rgba(80,80,85,0.95)' : variant==='graniteGreen' ? 'rgba(100,120,100,0.9)' : 'rgba(160,150,135,0.92)'; ctx.lineWidth=5;
+            const tiles=2; const step=size/tiles;
+            for(let i=0;i<=tiles;i++){ ctx.beginPath(); ctx.moveTo(i*step,0); ctx.lineTo(i*step,size); ctx.stroke(); ctx.beginPath(); ctx.moveTo(0,i*step); ctx.lineTo(size,i*step); ctx.stroke(); }
+            const tex=new THREE.CanvasTexture(c); tex.wrapS=tex.wrapT=THREE.RepeatWrapping; tex.encoding=THREE.sRGBEncoding; tex.anisotropy=renderer.capabilities.getMaxAnisotropy(); return tex;
+        }
+        function createSignGroup(w,h,d,colorHex, name){
+            const g=new THREE.Group();
+            const plateW=w, plateH=h, plateD=d;
+            const canvas=document.createElement('canvas'); canvas.width=512; canvas.height=256;
+            const ctx=canvas.getContext('2d'); ctx.fillStyle='#065f46'; ctx.fillRect(0,0,512,256);
+            ctx.fillStyle='#ffffff'; ctx.font='bold 38px Inter, sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillText(name,256,108);
+            ctx.font='16px Inter, sans-serif'; ctx.fillStyle='rgba(255,255,255,0.9)'; ctx.fillText('→',256,158);
+            const tex=new THREE.CanvasTexture(canvas); tex.encoding=THREE.sRGBEncoding; tex.anisotropy=renderer.capabilities.getMaxAnisotropy();
+            const plateMat=new THREE.MeshStandardMaterial({map:tex, roughness:0.3});
+            const plate=new THREE.Mesh(new THREE.BoxGeometry(plateW, plateH, plateD), plateMat);
+            plate.position.set(0,0,0); plate.castShadow=true; plate.userData.paintable=false; g.add(plate);
+            // braço que liga na parede (perpendicular)
+            const armLen=0.45;
+            const arm=new THREE.Mesh(new THREE.BoxGeometry(0.04,0.04,armLen), new THREE.MeshStandardMaterial({color:0x334155, metalness:0.4, roughness:0.5}));
+            arm.position.set(0,0,-plateD/2 - armLen/2); arm.castShadow=true; arm.userData.paintable=false; g.add(arm);
+            // flange de fixação na parede
+            const flange=new THREE.Mesh(new THREE.CylinderGeometry(0.07,0.07,0.015,16), new THREE.MeshStandardMaterial({color:0x475569, metalness:0.6, roughness:0.35}));
+            flange.rotation.x=Math.PI/2; flange.position.set(0,0,-plateD/2 - armLen -0.008); flange.userData.paintable=false; g.add(flange);
+            const plateFix=new THREE.Mesh(new THREE.BoxGeometry(0.12,0.12,0.02), new THREE.MeshStandardMaterial({color:0x1e293b}));
+            plateFix.position.set(0,0,-plateD/2 - armLen -0.018); plateFix.userData.paintable=false; g.add(plateFix);
+            return g;
+        }
+        function createSignMiniGroup(w,h,d,colorHex, name){
+            const g=new THREE.Group();
+            // placa mini colada na parede - fina
+            const mw = 0.68, mh=0.22, md=0.015;
+            const canvas=document.createElement('canvas'); canvas.width=512; canvas.height=160;
+            const ctx=canvas.getContext('2d'); ctx.fillStyle='#065f46'; ctx.fillRect(0,0,512,160);
+            // faixa superior pequena
+            ctx.fillStyle='rgba(255,255,255,0.12)'; ctx.fillRect(0,0,512,22);
+            ctx.fillStyle='#ffffff'; ctx.font='bold 32px Inter, sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillText(name,256,80);
+            ctx.font='11px Inter, sans-serif'; ctx.fillStyle='rgba(255,255,255,0.85)'; ctx.fillText('SETOR',256,108);
+            const tex=new THREE.CanvasTexture(canvas); tex.encoding=THREE.sRGBEncoding; tex.anisotropy=renderer.capabilities.getMaxAnisotropy();
+            const mat=new THREE.MeshStandardMaterial({map:tex, roughness:0.4});
+            const plate=new THREE.Mesh(new THREE.BoxGeometry(mw,mh,md), mat);
+            plate.position.set(0,0,0); plate.castShadow=true; plate.userData.paintable=false; g.add(plate);
+            // moldura fina ao redor
+            const frame=new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(mw,mh,md)), new THREE.LineBasicMaterial({color:0x0f3a2e}));
+            g.add(frame);
+            return g;
+        }
+        function createIPLabel(text){
+            const c=document.createElement('canvas'); c.width=256; c.height=64;
+            const ctx=c.getContext('2d'); ctx.fillStyle='rgba(15,23,42,0.92)'; ctx.fillRect(0,0,256,64);
+            ctx.strokeStyle='#38bdf8'; ctx.lineWidth=2; ctx.strokeRect(1,1,254,62);
+            ctx.fillStyle='#38bdf8'; ctx.font='bold 11px monospace'; ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillText(text,128,32);
+            const tex=new THREE.CanvasTexture(c); tex.encoding=THREE.sRGBEncoding;
+            const mat=new THREE.SpriteMaterial({map:tex, transparent:true});
+            const sprite=new THREE.Sprite(mat); sprite.scale.set(0.42,0.105,1); sprite.userData.isIPLabel=true;
+            return sprite;
+        }
+        function updateSelectedIP(){
+            if(!selectedObject) return;
+            const val=document.getElementById('ipInput').value.trim();
+            if(!val) return;
+            if(!/^(\d{1,3}\.){3}\d{1,3}$/.test(val)){ showToast('IP inválido! Use ex: 192.168.1.10'); return; }
+            selectedObject.userData.ip=val;
+            // remove etiqueta antiga
+            selectedObject.children.filter(c=>c.userData.isIPLabel).forEach(c=>selectedObject.remove(c));
+            const label=createIPLabel(val);
+            label.position.set(0, 0.32, 0.32);
+            // ajusta altura conforme tipo
+            if(selectedObject.userData.type==='printer') label.position.set(0,0.42,0.38);
+            if(selectedObject.userData.type==='cpu' || selectedObject.userData.type==='miniPc') label.position.set(0,0.38,0.28);
+            selectedObject.add(label);
+            showToast('IP '+val+' salvo!');
+        }
+        function createDoorGroup(w,h,d,colorHex,name){
+            const group = new THREE.Group();
+            const doorColor = new THREE.Color(colorHex);
+            const frameColor = doorColor.clone().multiplyScalar(0.55);
+            // Batente / moldura
+            const frameThick = 0.12;
+            const frameMat = new THREE.MeshStandardMaterial({color: frameColor, roughness:0.65});
+            const leftJamb = new THREE.Mesh(new THREE.BoxGeometry(frameThick, h, d+0.08), frameMat);
+            leftJamb.position.set(-w/2+frameThick/2, 0, 0); leftJamb.castShadow=true; leftJamb.receiveShadow=true; leftJamb.userData.paintable=false;
+            const rightJamb = new THREE.Mesh(new THREE.BoxGeometry(frameThick, h, d+0.08), frameMat);
+            rightJamb.position.set(w/2-frameThick/2, 0, 0); rightJamb.castShadow=true; rightJamb.userData.paintable=false;
+            const topJamb = new THREE.Mesh(new THREE.BoxGeometry(w, frameThick, d+0.08), frameMat);
+            topJamb.position.set(0, h/2-frameThick/2, 0); topJamb.castShadow=true; topJamb.userData.paintable=false;
+            group.add(leftJamb,rightJamb,topJamb);
+            // Folha da porta
+            const leafW = w - frameThick*2 - 0.04;
+            const leafH = h - frameThick - 0.02;
+            const leafGeo = new THREE.BoxGeometry(leafW, leafH, d*0.85);
+            const leafMat = new THREE.MeshStandardMaterial({color: doorColor, roughness:0.45, metalness:0.02});
+            const leaf = new THREE.Mesh(leafGeo, leafMat);
+            leaf.position.set(0, -frameThick/2, 0);
+            leaf.castShadow=true; leaf.receiveShadow=true; leaf.userData.paintable=true;
+            group.add(leaf);
+            // Almofadas / frisos
+            const panelMat = new THREE.MeshStandardMaterial({color: doorColor.clone().multiplyScalar(0.88), roughness:0.5});
+            const panel1 = new THREE.Mesh(new THREE.BoxGeometry(leafW*0.72, leafH*0.38, 0.03), panelMat);
+            panel1.position.set(0, leafH*0.18, d*0.45); panel1.userData.paintable=true; group.add(panel1);
+            const panel2 = new THREE.Mesh(new THREE.BoxGeometry(leafW*0.72, leafH*0.22, 0.03), panelMat);
+            panel2.position.set(0, -leafH*0.22, d*0.45); panel2.userData.paintable=true; group.add(panel2);
+            // Visor de vidro (hospital)
+            const glass = new THREE.Mesh(new THREE.PlaneGeometry(leafW*0.38, leafH*0.18), new THREE.MeshStandardMaterial({color:0xcffafe, transparent:true, opacity:0.32, roughness:0.05, metalness:0.1, side:THREE.DoubleSide}));
+            glass.position.set(0, leafH*0.05, d*0.47); glass.userData.paintable=false; group.add(glass);
+            const glassFrame = new THREE.Mesh(new THREE.BoxGeometry(leafW*0.42, leafH*0.20, 0.015), new THREE.MeshStandardMaterial({color:0x334155, roughness:0.4}));
+            glassFrame.position.set(0, leafH*0.05, d*0.46); glassFrame.userData.paintable=false; group.add(glassFrame);
+            // Maçaneta + rosácea
+            const handleMat = new THREE.MeshStandardMaterial({color:0xd4a017, metalness:0.75, roughness:0.25});
+            const rosette = new THREE.Mesh(new THREE.CylinderGeometry(0.09,0.09,0.02,16), handleMat);
+            rosette.rotation.x=Math.PI/2; rosette.position.set(leafW*0.32, -0.05, d*0.50); rosette.userData.paintable=false; group.add(rosette);
+            const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.025,0.025,0.32,12), handleMat);
+            handle.rotation.z=Math.PI/2; handle.position.set(leafW*0.32, -0.05, d*0.55); handle.castShadow=true; handle.userData.paintable=false; group.add(handle);
+            // Dobradiças
+            const hingeMat = new THREE.MeshStandardMaterial({color:0x94a3b8, metalness:0.6, roughness:0.35});
+            for(let i=0;i<3;i++){
+                const hinge = new THREE.Mesh(new THREE.BoxGeometry(0.04,0.14,0.06), hingeMat);
+                hinge.position.set(-leafW/2-0.02, leafH*0.38 - i*leafH*0.38, 0); hinge.userData.paintable=false; group.add(hinge);
+            }
+            // Soleira inferior
+            const sill = new THREE.Mesh(new THREE.BoxGeometry(w,0.03,d+0.12), new THREE.MeshStandardMaterial({color:0x475569, roughness:0.8}));
+            sill.position.set(0,-h/2+0.015,0); sill.userData.paintable=false; group.add(sill);
+            return group;
+        }
+
+        function createPrinterGroup(w,h,d,colorHex,name){
+            const group = new THREE.Group();
+            const baseColor = new THREE.Color(colorHex);
+            // Corpo principal
+            const bodyGeo = new THREE.BoxGeometry(w, h*0.65, d);
+            const bodyMat = new THREE.MeshStandardMaterial({color:0xf1f5f9, roughness:0.35, metalness:0.1});
+            const body = new THREE.Mesh(bodyGeo, bodyMat);
+            body.position.y = -h*0.12;
+            body.castShadow=true; body.receiveShadow=true; body.userData.paintable=true;
+            group.add(body);
+            // Tampa superior escura
+            const topGeo = new THREE.BoxGeometry(w*0.92, h*0.22, d*0.88);
+            const topMat = new THREE.MeshStandardMaterial({color:0x1e293b, roughness:0.4});
+            const top = new THREE.Mesh(topGeo, topMat);
+            top.position.y = h*0.28;
+            top.castShadow=true; top.userData.paintable=false;
+            group.add(top);
+            // Gaveta / bandeja frontal
+            const trayGeo = new THREE.BoxGeometry(w*0.75, h*0.12, 0.18);
+            const trayMat = new THREE.MeshStandardMaterial({color:0xcbd5e1, roughness:0.5});
+            const tray = new THREE.Mesh(trayGeo, trayMat);
+            tray.position.set(0, -h*0.22, d*0.42); tray.userData.paintable=false;
+            group.add(tray);
+            // Folha de papel saindo
+            const paperGeo = new THREE.PlaneGeometry(w*0.55, 0.35);
+            const paperMat = new THREE.MeshStandardMaterial({color:0xffffff, roughness:0.9, side:THREE.DoubleSide});
+            const paper = new THREE.Mesh(paperGeo, paperMat);
+            paper.position.set(0, -h*0.15, d*0.48);
+            paper.rotation.x = -0.18; paper.userData.paintable=false;
+            group.add(paper);
+            // Painel / display azul
+            const dispGeo = new THREE.BoxGeometry(w*0.28, h*0.14, 0.02);
+            const dispMat = new THREE.MeshStandardMaterial({color:0x0ea5e9, emissive:0x0ea5e9, emissiveIntensity:0.35, roughness:0.3});
+            const disp = new THREE.Mesh(dispGeo, dispMat);
+            disp.position.set(w*0.28, h*0.02, d*0.51); disp.userData.paintable=false;
+            group.add(disp);
+            // Botões
+            for(let i=0;i<3;i++){
+                const btn = new THREE.Mesh(new THREE.CylinderGeometry(0.04,0.04,0.02,12), new THREE.MeshStandardMaterial({color:i===0?0x22c55e:0x94a3b8}));
+                btn.rotation.x=Math.PI/2;
+                btn.position.set(-w*0.1 + i*0.11, h*0.02, d*0.51); btn.userData.paintable=false;
+                group.add(btn);
+            }
+            // Saída de papel traseira
+            const outGeo = new THREE.BoxGeometry(w*0.6, 0.04, d*0.3);
+            const out = new THREE.Mesh(outGeo, new THREE.MeshStandardMaterial({color:0x334155}));
+            out.position.set(0, h*0.15, -d*0.32); out.userData.paintable=false;
+            group.add(out);
+            // Luz de status
+            const led = new THREE.Mesh(new THREE.SphereGeometry(0.035,12,12), new THREE.MeshStandardMaterial({color:0x22c55e, emissive:0x22c55e, emissiveIntensity:1}));
+            led.position.set(-w*0.38, h*0.06, d*0.45); led.userData.paintable=false;
+            group.add(led);
+            // Se o usuário escolheu cor custom, aplica no corpo
+            if(colorHex !== 0xe2e8f0){ body.material.color.set(baseColor); }
+            return group;
+        }
+
+        function createCustomObject(type, x,y,z,w,h,d,colorHex,name){
+            let mesh;
+            if(type==='windowGlass'){
+                mesh = createWindowGroup(w,h,d,colorHex,name);
+                mesh.position.set(x,y,z);
+            } else if(type==='door'){
+                mesh = createDoorGroup(w,h,d,colorHex,name);
+                mesh.position.set(x,y,z);
+            } else if(type==='chair'){
+                mesh = createChairGroup(w,h,d,colorHex,name);
+                mesh.position.set(x,y,z);
+            } else if(type==='officeDesk'){
+                mesh = createOfficeDeskGroup(w,h,d,colorHex,name);
+                mesh.position.set(x,y,z);
+            } else if(type==='reception'){
+                mesh = createReceptionGroup(w,h,d,colorHex,name);
+                mesh.position.set(x,y,z);
+            } else if(type==='toilet'){
+                mesh = createToiletGroup(w,h,d,colorHex,name);
+                mesh.position.set(x,y,z);
+            } else if(type==='printer'){
+                mesh = createPrinterGroup(w,h,d,colorHex,name);
+                mesh.position.set(x,y,z);
+            } else if(type==='monitor'){
+                mesh = createMonitorGroup(w,h,d,colorHex,name);
+                mesh.position.set(x,y,z);
+                // monitor fica em cima da mesa: ajusta Y para base encostar
+                mesh.position.y = y + 0.18;
+            } else if(type==='cpu'){
+                mesh = createCpuGroup(w,h,d,colorHex,name);
+                mesh.position.set(x,y,z);
+            } else if(type==='miniPc'){
+                mesh = createMiniPcGroup(w,h,d,colorHex,name);
+                mesh.position.set(x,y,z);
+            } else if(type==='desk'){
+                mesh = createOfficeDeskGroup(w,h,d,colorHex,name);
+                mesh.position.set(x,y,z);
+            } else if(type==='floorTile'){
+                const variant=window._lastFloorVariant||'ceramic';
+                let tex;
+                if(variant==='ceramic') tex=createCeramicTexture(colorHex);
+                else tex=createGraniteTexture(variant, colorHex);
+                const mat = new THREE.MeshStandardMaterial({map:tex, roughness: variant==='graniteBlack'?0.42: variant==='graniteExotic'?0.38:0.55, metalness: variant==='graniteBlack'?0.18:0.04});
+                const geo = new THREE.BoxGeometry(w,h,d);
+                mesh = new THREE.Mesh(geo, mat);
+                mesh.position.set(x,y,z);
+                mesh.userData.paintable=true;
+                mesh.userData.variant=variant;
+                mesh.material.userData={ isFloor:true, baseHex:colorHex, variant:variant };
+                const edge = new THREE.LineSegments(new THREE.EdgesGeometry(geo), new THREE.LineBasicMaterial({color:0xa8a29e, transparent:true, opacity:0.5}));
+                edge.userData.paintable=false;
+                mesh.add(edge);
+                mesh.receiveShadow=true; mesh.castShadow=false;
+            } else if(type==='sign'){
+                mesh=createSignGroup(w,h,d,colorHex,name);
+                mesh.position.set(x,y,z);
+            } else if(type==='signMini'){
+                mesh=createSignMiniGroup(w,h,d,colorHex,name);
+                mesh.position.set(x,y,z);
+            } else {
+                let mat;
+                if(false){
+                    const canvas=document.createElement('canvas'); canvas.width=512; canvas.height=256;
+                    const ctx=canvas.getContext('2d'); ctx.fillStyle='#065f46'; ctx.fillRect(0,0,512,256);
+                    ctx.fillStyle='#ffffff'; ctx.font='bold 42px Inter, sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillText(name,256,128);
+                    const texture=new THREE.CanvasTexture(canvas); texture.encoding=THREE.sRGBEncoding; texture.anisotropy=renderer.capabilities.getMaxAnisotropy();
+                    mat=new THREE.MeshStandardMaterial({map:texture, roughness:0.3});
+                } else {
+                    mat=new THREE.MeshStandardMaterial({color:colorHex, roughness:0.45, metalness:0.05});
+                }
+                const geo=new THREE.BoxGeometry(w,h,d);
+                mesh=new THREE.Mesh(geo,mat);
+                mesh.position.set(x,y,z);
+                mesh.userData.paintable=true;
+                mesh.castShadow=true; mesh.receiveShadow=true;
+            }
+
+            // Se for Group, garante que raycast encontre filhos; guardamos dados no Group (preserva paintable dos filhos)
+            const prevPaintable = mesh.userData.paintable;
+            mesh.userData={ id:Math.random().toString(36).substr(2,9), type:type, name:name, floor:currentFloor, baseHeight:h };
+            if(prevPaintable!==undefined) mesh.userData.paintable = prevPaintable;
+            // Para grupos, propagar userData para filhos para facilitar raycast? Mantemos no pai e usamos traverse
+            mesh.traverse(c=>{ if(c.isMesh) c.userData.rootGroup = mesh; });
+
+            scene.add(mesh);
+            if(!floors[currentFloor]) floors[currentFloor]={objects:[]};
+            floors[currentFloor].objects.push(mesh);
+            selectObject(mesh);
+            return mesh;
+        }
+
+        function getRootObject(obj){
+            // Se clicou num filho do Group (ex: impressora), retorna o grupo raiz
+            if(obj.userData && obj.userData.rootGroup) return obj.userData.rootGroup;
+            // Se o próprio é grupo mas sem rootGroup, é ele
+            return obj;
+        }
+
+        function onHover(e){
+            if(isDraggingObject || currentMode==='streetview') return;
+            if(e.target.closest('#ui-container')|| e.target.closest('#btn-restore')) return;
+            mouse.x=(e.clientX/window.innerWidth)*2-1; mouse.y=-(e.clientY/window.innerHeight)*2+1;
+            raycaster.setFromCamera(mouse,camera);
+            let objs=[]; Object.values(floors).forEach(f=>{ if(f&&f.objects) f.objects.forEach(o=>{ if(o.userData.type!=='floorDeco') objs.push(o); }); });
+            // Expandir grupos para intersect: intersectObjects com recursive true já pega filhos
+            const intersects=raycaster.intersectObjects(objs, true);
+            if(intersects.length>0){
+                const root=getRootObject(intersects[0].object);
+                if(hoverObject!==root){
+                    if(hoverObject) setEmissive(hoverObject,false);
+                    hoverObject=root; setEmissive(hoverObject,true);
+                    renderer.domElement.style.cursor='grab';
+                }
+            } else {
+                if(hoverObject) setEmissive(hoverObject,false);
+                hoverObject=null;
+                renderer.domElement.style.cursor='grab';
+            }
+            if(selectedObject) renderer.domElement.style.cursor='grab';
+        }
+        function setEmissive(obj, on){
+            if(!obj || obj===selectedObject) return;
+            obj.traverse(c=>{
+                if(c.isMesh && c.material && c.material.emissive){
+                    c.material.emissive.setHex(on?0x16405a:0x000000);
+                }
+            });
+        }
+        function setSelectedHighlight(obj){
+            // limpa anterior
+            scene.traverse(c=>{ if(c.isMesh && c.material && c.material.emissive) c.material.emissive.setHex(0x000000); });
+            if(obj) obj.traverse(c=>{ if(c.isMesh && c.material && c.material.emissive) c.material.emissive.setHex(0x0ea5e9); });
+        }
+
+        function onPointerDown(event){
+            if(event.target.closest('#ui-container')|| event.target.closest('#btn-restore')) return;
+            // Botão direito ignora
+            if(event.button!==0) return;
+            let mx,my;
+            if(currentMode==='streetview'){ mx=0; my=0; } else { mx=(event.clientX/window.innerWidth)*2-1; my=-(event.clientY/window.innerHeight)*2+1; }
+            mouse.set(mx,my);
+            raycaster.setFromCamera(mouse,camera);
+            let intersectable=[]; Object.values(floors).forEach(f=>{ if(f&&f.objects) f.objects.forEach(o=>{ if(o.userData.type!=='floorDeco' && o.userData.type!=='infiniteFloor') intersectable.push(o); }); });
+            const intersects=raycaster.intersectObjects(intersectable, true);
+            if(intersects.length>0){
+                let clicked=getRootObject(intersects[0].object);
+                if(currentMode==='streetview' && intersects[0].distance>15) return;
+                selectObject(clicked);
+                if(currentMode==='editor'){
+                    // Prepara drag com offset - CLIQUE E SEGURE
+                    isDraggingObject=true;
+                    orbitControls.enabled=false;
+                    renderer.domElement.setPointerCapture(event.pointerId);
+                    renderer.domElement.classList.add('grabbing');
+                    // Plano horizontal na altura do objeto (ou chão se for piso)
+                    const planeY = clicked.userData.type==='floorTile' ? clicked.position.y : clicked.position.y;
+                    dragPlane.set(new THREE.Vector3(0,1,0), -planeY);
+                    // Calcula offset entre ponto de intersecção e centro do objeto
+                    const intersectPoint = new THREE.Vector3();
+                    raycaster.ray.intersectPlane(dragPlane, intersectPoint);
+                    dragOffset.copy(intersectPoint).sub(clicked.position);
+                    clicked.userData._origY = clicked.position.y;
+                    clicked.userData._onTable=false;
+                    showToast('🖱️ Arrastando... passe sobre a MESA para apoiar! SHIFT=levitar');
+                }
+            } else {
+                // Clicou no chão vazio - desseleciona
+                if(currentMode==='editor') clearSelection();
+            }
+        }
+        function getWallSnapAt(x,z, objW){
+            const snapDist=1.4;
+            let best=null, bestDist=Infinity;
+            if(!floors[currentFloor] || !floors[currentFloor].objects) return null;
+            floors[currentFloor].objects.forEach(wall=>{
+                if(wall.userData.type!=='wall' || wall===selectedObject) return;
+                const box=new THREE.Box3().setFromObject(wall);
+                const cx=(box.min.x+box.max.x)/2, cz=(box.min.z+box.max.z)/2;
+                const sx=box.max.x-box.min.x, sz=box.max.z-box.min.z;
+                const alongX = sx > sz; // parede esticada em X
+                let snapX=x, snapZ=z, rotY=wall.rotation.y;
+                let dist, inside=false;
+                if(alongX){
+                    dist=Math.abs(z - cz);
+                    inside = (x >= box.min.x - 0.15 && x <= box.max.x + 0.15);
+                    snapZ=cz;
+                    const halfW = (objW||1.4)/2 + 0.08;
+                    snapX=Math.max(box.min.x+halfW, Math.min(box.max.x-halfW, x));
+                    // rot já é 0
+                    rotY=wall.rotation.y;
+                } else {
+                    dist=Math.abs(x - cx);
+                    inside = (z >= box.min.z - 0.15 && z <= box.max.z + 0.15);
+                    snapX=cx;
+                    const halfW = (objW||1.4)/2 + 0.08;
+                    snapZ=Math.max(box.min.z+halfW, Math.min(box.max.z-halfW, z));
+                    rotY=wall.rotation.y + Math.PI/2;
+                }
+                if(inside && dist < snapDist && dist < bestDist){
+                    bestDist=dist;
+                    best={x:snapX, z:snapZ, rotY: rotY, wall:wall};
+                }
+            });
+            return best;
+        }
+        function getTableTopAt(x,z){
+            const tables = ['officeDesk','reception','desk'];
+            let bestTop = null;
+            if(!floors[currentFloor] || !floors[currentFloor].objects) return null;
+            floors[currentFloor].objects.forEach(obj=>{
+                if(!tables.includes(obj.userData.type) || obj===selectedObject) return;
+                const box=new THREE.Box3().setFromObject(obj);
+                const pad=0.04; // tolerância
+                if(x >= box.min.x - pad && x <= box.max.x + pad && z >= box.min.z - pad && z <= box.max.z + pad){
+                    const top=box.max.y;
+                    if(bestTop===null || top > bestTop) bestTop=top;
+                }
+            });
+            return bestTop;
+        }
+        function onPointerMove(event){
+            if(!isDraggingObject || !selectedObject || currentMode==='streetview') return;
+            mouse.x=(event.clientX/window.innerWidth)*2-1; mouse.y=-(event.clientY/window.innerHeight)*2+1;
+            raycaster.setFromCamera(mouse,camera);
+            const isShift = event.shiftKey;
+            const isTable = ['officeDesk','reception','desk','floorTile','wall','column','door','windowGlass','sign','signMini'].includes(selectedObject.userData.type);
+            if(isShift){
+                const delta = -event.movementY * 0.03;
+                selectedObject.position.y = Math.max((currentFloor*floorHeight)+0.1, selectedObject.position.y + delta);
+                dragPlane.constant = -selectedObject.position.y;
+            }
+            let targetPos=new THREE.Vector3();
+            if(raycaster.ray.intersectPlane(dragPlane, targetPos)){
+                let nx = targetPos.x - dragOffset.x;
+                let nz = targetPos.z - dragOffset.z;
+                if(document.getElementById('snapToggle').checked){
+                    nx=Math.round(nx*2)/2; nz=Math.round(nz*2)/2;
+                }
+                const isDoorWin = ['door','windowGlass','sign','signMini'].includes(selectedObject.userData.type);
+                // Portas e janelas: encaixe magnético na parede
+                if(!isShift && isDoorWin){
+                    const snap=getWallSnapAt(nx,nz, selectedObject.userData.baseHeight ? selectedObject.userData.baseHeight*0 ? 1.4 : 1.4 : 1.4);
+                    // usa largura real do objeto para clamp
+                    let objW=1.4; try{ const b=new THREE.Box3().setFromObject(selectedObject); objW=Math.max(b.max.x-b.min.x, b.max.z-b.min.z); }catch(e){}
+                    const snap2=getWallSnapAt(nx,nz, objW);
+                    const s=snap2||snap;
+                    if(s){
+                        selectedObject.position.x=s.x;
+                        selectedObject.position.z=s.z;
+                        selectedObject.rotation.y=s.rotY;
+                        document.getElementById('rotYInput').value=(THREE.Math.radToDeg(s.rotY)%360).toFixed(0);
+                        const floorY=currentFloor*floorHeight;
+                        if(selectedObject.userData.type==='door') selectedObject.position.y=floorY+1.5;
+                        else if(selectedObject.userData.type==='windowGlass') selectedObject.position.y=floorY+1.15;
+                        else if(selectedObject.userData.type==='sign') selectedObject.position.y=floorY+2.35;
+                        else if(selectedObject.userData.type==='signMini') selectedObject.position.y=floorY+1.65;
+                        dragPlane.constant=-selectedObject.position.y;
+                        if(!selectedObject.userData._onWall){
+                            selectedObject.userData._onWall=true;
+                            showToast('🧲 Encaixado na parede! (atravessável)');
+                        }
+                        return;
+                    } else {
+                        if(selectedObject.userData._onWall) selectedObject.userData._onWall=false;
+                    }
+                }
+                selectedObject.position.x = nx;
+                selectedObject.position.z = nz;
+                // Auto-snap sobre a mesa: corrige base afundando usando Box3 real
+                if(!isShift && !isTable){
+                    const top = getTableTopAt(nx, nz);
+                    if(top!==null){
+                        const boxSel=new THREE.Box3().setFromObject(selectedObject);
+                        const bottomOffset = selectedObject.position.y - boxSel.min.y;
+                        const targetY = top + bottomOffset + 0.008;
+                        selectedObject.position.y = targetY;
+                        dragPlane.constant = -targetY;
+                        if(!selectedObject.userData._onTable){
+                            selectedObject.userData._onTable=true;
+                            showToast('📌 Sobre a mesa!');
+                        }
+                    } else {
+                        if(selectedObject.userData._onTable){
+                            selectedObject.userData._onTable=false;
+                            const boxSel=new THREE.Box3().setFromObject(selectedObject);
+                            const bottomOffset = selectedObject.position.y - boxSel.min.y;
+                            const floorTop = currentFloor*floorHeight;
+                            const baseY = floorTop + bottomOffset + 0.008;
+                            selectedObject.position.y = baseY;
+                            dragPlane.constant = -baseY;
+                        }
+                    }
+                }
+            }
+        }
+        function onPointerUp(event){
+            if(isDraggingObject){
+                isDraggingObject=false;
+                renderer.domElement.classList.remove('grabbing');
+                if(currentMode==='editor') orbitControls.enabled=true;
+                try{ renderer.domElement.releasePointerCapture(event.pointerId); }catch(e){}
+                if(selectedObject){
+                    const extra = selectedObject.userData._onTable ? ' sobre a mesa' : '';
+                    showToast(`📍 Fixado${extra} X:${selectedObject.position.x.toFixed(0)} Z:${selectedObject.position.z.toFixed(0)} Y:${selectedObject.position.y.toFixed(2)}`);
+                }
+            }
+        }
+
+        function selectObject(mesh){
+            const root=getRootObject(mesh);
+            selectedObject=root;
+            setSelectedHighlight(root);
+            const inspector=document.getElementById('inspector-panel');
+            inspector.style.opacity='1'; inspector.style.pointerEvents='auto';
+            document.getElementById('selected-object-name').innerText=`Selecionado: ${root.userData.name}`;
+            document.getElementById('objNameInput').value=root.userData.name;
+            let col=null;
+            root.traverse(c=>{ if(!col && c.isMesh && c.material && c.material.color && c.userData.paintable===true) col=c.material.color; });
+            if(!col) root.traverse(c=>{ if(!col && c.isMesh && c.material && c.material.color) col=c.material.color; });
+            if(col) document.getElementById('objColorPicker').value='#'+col.getHexString();
+            document.getElementById('scaleXInput').value=root.scale.x;
+            document.getElementById('scaleYInput').value=root.scale.y;
+            document.getElementById('scaleZInput').value=root.scale.z;
+            document.getElementById('rotYInput').value = (THREE.Math.radToDeg(root.rotation.y) % 360);
+            // IP panel só para TI
+            const ipPanel=document.getElementById('ip-panel');
+            const isTI=['cpu','miniPc','printer','monitor'].includes(root.userData.type);
+            if(isTI){ ipPanel.style.display='flex'; document.getElementById('ipInput').value=root.userData.ip||''; }
+            else ipPanel.style.display='none';
+        }
+        function clearSelection(){
+            if(selectedObject) setSelectedHighlight(null);
+            selectedObject=null;
+            document.getElementById('inspector-panel').style.opacity='0.5';
+            document.getElementById('inspector-panel').style.pointerEvents='none';
+            document.getElementById('selected-object-name').innerText="Nenhum objeto selecionado";
+        }
+        function updateSelectedName(newName){
+            if(!selectedObject) return;
+            selectedObject.userData.name=newName;
+            document.getElementById('selected-object-name').innerText=`Selecionado: ${newName}`;
+            if(selectedObject.userData.type==='sign'){
+                let target=null; selectedObject.traverse(c=>{ if(!target && c.isMesh && c.material && c.material.map) target=c; });
+                if(target){
+                    const canvas=document.createElement('canvas'); canvas.width=512; canvas.height=256;
+                    const ctx=canvas.getContext('2d'); ctx.fillStyle='#065f46'; ctx.fillRect(0,0,512,256);
+                    ctx.fillStyle='#ffffff'; ctx.font='bold 38px Inter, sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillText(newName,256,108);
+                    ctx.font='16px Inter, sans-serif'; ctx.fillStyle='rgba(255,255,255,0.9)'; ctx.fillText('→',256,158);
+                    const tex=new THREE.CanvasTexture(canvas); tex.encoding=THREE.sRGBEncoding; target.material.map=tex; target.material.needsUpdate=true;
+                }
+            } else if(selectedObject.userData.type==='signMini'){
+                let target=null; selectedObject.traverse(c=>{ if(!target && c.isMesh && c.material && c.material.map) target=c; });
+                if(target){
+                    const canvas=document.createElement('canvas'); canvas.width=512; canvas.height=160;
+                    const ctx=canvas.getContext('2d'); ctx.fillStyle='#065f46'; ctx.fillRect(0,0,512,160);
+                    ctx.fillStyle='rgba(255,255,255,0.12)'; ctx.fillRect(0,0,512,22);
+                    ctx.fillStyle='#ffffff'; ctx.font='bold 32px Inter, sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillText(newName,256,80);
+                    ctx.font='11px Inter, sans-serif'; ctx.fillStyle='rgba(255,255,255,0.85)'; ctx.fillText('SETOR',256,108);
+                    const tex=new THREE.CanvasTexture(canvas); tex.encoding=THREE.sRGBEncoding; target.material.map=tex; target.material.needsUpdate=true;
+                }
+            }
+        }
+        function updateSelectedColor(hex){
+            if(!selectedObject) return;
+            const color = new THREE.Color(hex);
+            // Placa: recria textura com nova cor de fundo
+            if(selectedObject.userData.type==='sign'){
+                let targetMesh=null;
+                selectedObject.traverse(c=>{ if(c.isMesh && c.material && c.material.map) targetMesh=c; });
+                if(targetMesh){
+                    const canvas=document.createElement('canvas'); canvas.width=512; canvas.height=256;
+                    const ctx=canvas.getContext('2d'); ctx.fillStyle=hex; ctx.fillRect(0,0,512,256);
+                    ctx.fillStyle='#ffffff'; ctx.font='bold 42px Inter, sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillText(selectedObject.userData.name,256,128);
+                    const tex=new THREE.CanvasTexture(canvas); tex.encoding=THREE.sRGBEncoding;
+                    targetMesh.material.map=tex; targetMesh.material.color.set(0xffffff); targetMesh.material.needsUpdate=true;
+                    showToast("Cor da placa alterada!");
+                    return;
+                }
+            }
+            if(selectedObject.userData.type==='signMini'){
+                let target=null; selectedObject.traverse(c=>{ if(!target && c.isMesh && c.material && c.material.map) target=c; });
+                if(target){
+                    const canvas=document.createElement('canvas'); canvas.width=512; canvas.height=160;
+                    const ctx=canvas.getContext('2d'); ctx.fillStyle=hex; ctx.fillRect(0,0,512,160);
+                    ctx.fillStyle='rgba(255,255,255,0.12)'; ctx.fillRect(0,0,512,22);
+                    ctx.fillStyle='#ffffff'; ctx.font='bold 32px Inter, sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillText(selectedObject.userData.name,256,80);
+                    ctx.font='11px Inter, sans-serif'; ctx.fillStyle='rgba(255,255,255,0.85)'; ctx.fillText('SETOR',256,108);
+                    const tex=new THREE.CanvasTexture(canvas); tex.encoding=THREE.sRGBEncoding; target.material.map=tex; target.material.color.set(0xffffff); target.material.needsUpdate=true;
+                    showToast("Cor da placa mini alterada!"); return;
+                }
+            }
+            // Piso granito/cerâmica: recria textura com nova cor base mantendo variante
+            if(selectedObject.userData.type==='floorTile'){
+                let target=null; selectedObject.traverse(c=>{ if(!target && c.isMesh && c.material && c.material.map) target=c; });
+                if(!target) target=selectedObject;
+                if(target && target.material){
+                    const variant=selectedObject.userData.variant||'ceramic';
+                    const newTex = variant==='ceramic' ? createCeramicTexture(hex) : createGraniteTexture(variant, hex);
+                    target.material.map=newTex; target.material.color.set(0xffffff); target.material.needsUpdate=true;
+                    showToast("Cor do piso alterada!");
+                    return;
+                }
+            }
+            let changed=false;
+            selectedObject.traverse(c=>{
+                if(c.isMesh && c.material && c.material.color){
+                    if(c.userData.paintable===true){ 
+                        c.material.color.copy(color); 
+                        // remove textura se era cor sólida antes (exceto cerâmica já tratada)
+                        if(c.material.map && selectedObject.userData.type!=='floorTile' && selectedObject.userData.type!=='sign' && selectedObject.userData.type!=='monitor') { /* mantém mapa da tela do monitor */ }
+                        c.material.needsUpdate=true; changed=true; 
+                    } else if(selectedObject.userData.type!=='door' && selectedObject.userData.type!=='printer' && selectedObject.userData.type!=='monitor' && selectedObject.userData.type!=='cpu' && c.userData.paintable!==false){
+                        // objetos simples (parede, mesa etc) - pinta
+                        c.material.color.copy(color); if(c.material.map) { c.material.map=null; } c.material.needsUpdate=true; changed=true;
+                    }
+                }
+            });
+            if(changed) showToast("Cor alterada!");
+            else showToast("Este objeto não tem cor alterável");
+        }
+        function updateSelectedScale(){
+            if(!selectedObject) return;
+            const sx=parseFloat(document.getElementById('scaleXInput').value);
+            const sy=parseFloat(document.getElementById('scaleYInput').value);
+            const sz=parseFloat(document.getElementById('scaleZInput').value);
+            selectedObject.scale.set(sx,sy,sz);
+        }
+        function updateSelectedRotation(deg){
+            if(!selectedObject) return;
+            selectedObject.rotation.y = THREE.Math.degToRad(parseFloat(deg));
+        }
+        function moveSelected(axis, amount){
+            if(!selectedObject) return;
+            selectedObject.position[axis]+=amount;
+            if(document.getElementById('snapToggle').checked){ selectedObject.position[axis]=Math.round(selectedObject.position[axis]); }
+            showToast(`Movido ${axis.toUpperCase()}`);
+        }
+        function moveSelectedVertical(amount){
+            if(!selectedObject) return;
+            selectedObject.position.y+=amount;
+            showToast(`Altura Y: ${selectedObject.position.y.toFixed(1)}m`);
+        }
+        function deleteSelectedObject(){
+            if(!selectedObject) return;
+            scene.remove(selectedObject);
+            Object.values(floors).forEach(f=>{ if(f&&f.objects){ const idx=f.objects.indexOf(selectedObject); if(idx>-1) f.objects.splice(idx,1); }});
+            clearSelection();
+            showToast("Objeto excluído!");
+        }
+        function searchAndTeleport(){
+            const query=document.getElementById('searchInput').value.toLowerCase().trim(); if(!query) return;
+            let found=null,foundFloor=0;
+            Object.keys(floors).forEach(fn=>{ if(floors[fn]&&floors[fn].objects) floors[fn].objects.forEach(o=>{ if(o.userData.name&&o.userData.name.toLowerCase().includes(query)){ found=o; foundFloor=parseInt(fn); }}); });
+            if(found){
+                changeFloor(foundFloor); selectObject(found);
+                if(currentMode==='editor'){ orbitControls.target.copy(found.position); camera.position.set(found.position.x, found.position.y+15, found.position.z+25); }
+                else camera.position.set(found.position.x, (foundFloor* floorHeight)+1.7, found.position.z+6);
+                showToast(`Teletransportado: "${found.userData.name}"`);
+            } else showToast(`Nada encontrado: "${query}"`);
+        }
+        function toggleMenu(){
+            const menu=document.getElementById('ui-container'); const btn=document.getElementById('btn-restore');
+            menu.classList.toggle('minimized');
+            if(menu.classList.contains('minimized')) btn.classList.remove('hidden'); else btn.classList.add('hidden');
+        }
+        function updateWalkSpeed(val){ walkSpeed=parseInt(val); document.getElementById('speed-label').innerText=`${walkSpeed} km/h`; }
+        function setMode(mode){
+            currentMode=mode;
+            const btnEditor=document.getElementById('btn-mode-editor'); const btnSV=document.getElementById('btn-mode-sv');
+            const badge=document.getElementById('mode-badge'); const speedBox=document.getElementById('speed-control-box');
+            const crosshair=document.getElementById('crosshair'); const hint=document.getElementById('instruction-hint');
+            if(mode==='editor'){
+                btnEditor.className="py-1.5 bg-sky-600 hover:bg-sky-500 text-white rounded-xl text-xs font-bold transition shadow-lg shadow-sky-600/20 cursor-pointer";
+                btnSV.className="py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold transition cursor-pointer";
+                badge.className="px-2 py-0.5 bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-full text-[10px] font-semibold"; badge.innerText="Editor";
+                speedBox.classList.add('hidden'); crosshair.style.display='none'; hint.innerText="🖱️ Clique e SEGURE para arrastar! SHIFT+arrastar = levitar.";
+                orbitControls.enabled=true; camera.position.set(0,35,50); orbitControls.target.set(0,currentFloor* floorHeight,0);
+            } else {
+                btnSV.className="py-1.5 bg-sky-600 hover:bg-sky-500 text-white rounded-xl text-xs font-bold transition shadow-lg shadow-sky-600/20 cursor-pointer";
+                btnEditor.className="py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold transition cursor-pointer";
+                badge.className="px-2 py-0.5 bg-sky-500/20 text-sky-400 border border-sky-500/30 rounded-full text-[10px] font-semibold"; badge.innerText="Street View Editável";
+                speedBox.classList.remove('hidden'); crosshair.style.display='block'; hint.innerText="WASD para andar, arraste mouse para olhar. Mira no centro para selecionar!";
+                orbitControls.enabled=false; camera.position.set(0,(currentFloor* floorHeight)+1.7,10); camera.rotation.set(0,0,0);
+            }
+            showToast(`Modo: ${mode==='editor'?'Editor Livre':'Street View Editável'}`);
+        }
+        function updateObjectsVisibility(){
+            Object.keys(floors).forEach(fn=>{
+                const fIndex=parseInt(fn); const isVis=fIndex<=currentFloor;
+                if(floors[fn]&&floors[fn].objects) floors[fn].objects.forEach(o=>{ o.visible=isVis||fIndex===currentFloor; });
+            });
+            infiniteFloor.visible=true; gridHelper.visible=document.getElementById('gridToggle').checked;
+        }
+        function showToast(msg){
+            const t=document.getElementById('toast'); t.innerText=msg; t.style.opacity='1';
+            setTimeout(()=>{ t.style.opacity='0'; },2500);
+        }
+        function onWindowResize(){ camera.aspect=window.innerWidth/window.innerHeight; camera.updateProjectionMatrix(); renderer.setSize(window.innerWidth,window.innerHeight); }
+        function animate(){
+            requestAnimationFrame(animate);
+            const time=performance.now(); const delta=(time-prevTime)/1000;
+            if(currentMode==='streetview'){
+                velocity.x-=velocity.x*10.0*delta; velocity.z-=velocity.z*10.0*delta;
+                direction.z=Number(moveForward)-Number(moveBackward); direction.x=Number(moveRight)-Number(moveLeft); direction.normalize();
+                const currentAccel=walkSpeed*1.8;
+                if(moveForward||moveBackward) velocity.z-=direction.z*currentAccel*delta;
+                if(moveLeft||moveRight) velocity.x-=direction.x*currentAccel*delta;
+                const oldX=camera.position.x, oldZ=camera.position.z;
+                camera.translateX(-velocity.x*delta); camera.translateZ(velocity.z*delta);
+                camera.position.y=(currentFloor* floorHeight)+1.7;
+                let hasCollided=false; const playerRadius=0.6;
+                if(floors[currentFloor]&&floors[currentFloor].objects){
+                    floors[currentFloor].objects.forEach(obj=>{
+                        if(obj.userData && (obj.userData.type==='wall'||obj.userData.type==='column')){
+                            const box=new THREE.Box3().setFromObject(obj); box.expandByScalar(playerRadius);
+                            if(box.containsPoint(camera.position)) hasCollided=true;
+                        }
+                    });
+                }
+                if(hasCollided){ camera.position.x=oldX; camera.position.z=oldZ; velocity.set(0,0,0); }
+            } else orbitControls.update();
+            prevTime=time; renderer.render(scene,camera);
+        }
+    </script>
+</body>
+</html>

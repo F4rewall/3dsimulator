@@ -1,0 +1,779 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hospital 3D Pro Studio - Editor & Street View Editável</title>
+    <!-- Tailwind CSS para estilização moderna -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Three.js para renderização 3D -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <!-- OrbitControls para movimentação livre no editor -->
+    <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Inter', sans-serif; user-select: none; }
+        canvas { display: block; width: 100vw; height: 100vh; }
+        .glass-panel {
+            background: rgba(15, 23, 42, 0.95);
+            backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.12);
+        }
+        /* Transição suave para recolher o menu */
+        #ui-container {
+            transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s ease;
+        }
+        #ui-container.minimized {
+            transform: translateX(-105%);
+            opacity: 0;
+            pointer-events: none;
+        }
+        /* Mira central no modo Street View */
+        #crosshair {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 12px;
+            height: 12px;
+            transform: translate(-50%, -50%);
+            pointer-events: none;
+            display: none;
+            z-index: 20;
+        }
+        #crosshair::before, #crosshair::after {
+            content: '';
+            position: absolute;
+            background: rgba(56, 189, 248, 0.95);
+            border-radius: 2px;
+            box-shadow: 0 0 4px rgba(0,0,0,0.8);
+        }
+        #crosshair::before { top: 5px; left: 0; width: 12px; height: 2px; }
+        #crosshair::after { top: 0; left: 5px; width: 2px; height: 12px; }
+    </style>
+</head>
+<body class="bg-slate-950 text-slate-100">
+
+    <!-- Mira Central para Street View -->
+    <div id="crosshair"></div>
+
+    <!-- Botão para restaurar o menu minimizado -->
+    <button id="btn-restore" onclick="toggleMenu()" class="absolute top-4 left-4 z-20 hidden bg-sky-600 hover:bg-sky-500 text-white p-3 rounded-2xl shadow-2xl flex items-center gap-2 text-xs font-bold transition cursor-pointer">
+        🏥 Abrir Menu Hospital
+    </button>
+
+    <!-- Painel de Controle Principal (Compacto e Rolável) -->
+    <div id="ui-container" class="absolute top-4 left-4 z-10 w-80 max-w-[85vw] glass-panel rounded-2xl p-3.5 shadow-2xl flex flex-col gap-2.5 max-h-[92vh] overflow-y-auto">
+        <div class="flex items-center justify-between border-b border-slate-800 pb-2">
+            <h1 class="text-xs font-extrabold text-sky-400 flex items-center gap-1.5">
+                🏥 Hospital 3D Pro
+            </h1>
+            <div class="flex items-center gap-2">
+                <span id="mode-badge" class="px-2 py-0.5 bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-full text-[10px] font-semibold">Editor</span>
+                <button onclick="toggleMenu()" class="p-1 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs transition cursor-pointer" title="Minimizar Menu">
+                    ➖
+                </button>
+            </div>
+        </div>
+        <p id="instruction-hint" class="text-[10px] text-slate-400">Clique em qualquer objeto para selecionar. Arraste o mouse para mover pelo chão!</p>
+
+        <!-- Barra de Pesquisa de Setores / Teleporte -->
+        <div class="bg-sky-950/40 rounded-xl p-2.5 border border-sky-800/50 flex flex-col gap-1.5">
+            <div class="text-[11px] font-semibold text-sky-300 flex items-center justify-between">
+                <span>🔍 BUSCAR SETOR / SALA</span>
+            </div>
+            <div class="flex gap-1.5">
+                <input type="text" id="searchInput" placeholder="Ex: UTI, Recepção..." class="w-full bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-xs text-slate-200 focus:outline-none focus:border-sky-500">
+                <button onclick="searchAndTeleport()" class="px-2.5 bg-sky-600 hover:bg-sky-500 rounded-lg text-xs font-bold transition cursor-pointer text-white">Ir</button>
+            </div>
+        </div>
+
+        <!-- Seletor de Andares (Mapa Muito Amplo 300m) -->
+        <div class="bg-slate-900/80 rounded-xl p-2.5 border border-slate-800 flex flex-col gap-1.5">
+            <div class="flex justify-between items-center text-[11px] font-semibold text-slate-300">
+                <span>PISOS E ANDARES (Mapa 300m)</span>
+                <span id="current-floor-label" class="text-sky-400 font-bold">Térreo (0m)</span>
+            </div>
+            <div class="grid grid-cols-3 gap-1.5">
+                <button onclick="changeFloor(0)" class="py-1 bg-sky-600 hover:bg-sky-500 rounded-lg text-[11px] font-medium transition cursor-pointer text-white">Térreo</button>
+                <button onclick="changeFloor(1)" class="py-1 bg-slate-800 hover:bg-slate-700 rounded-lg text-[11px] font-medium transition cursor-pointer">2º Andar</button>
+                <button onclick="addNewFloor()" class="py-1 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-xs font-bold transition cursor-pointer" title="Adicionar Novo Andar">+</button>
+            </div>
+        </div>
+
+        <!-- Alternar Modo de Câmera & Velocidade -->
+        <div class="flex flex-col gap-1.5">
+            <div class="grid grid-cols-2 gap-1.5">
+                <button onclick="setMode('editor')" id="btn-mode-editor" class="py-1.5 bg-sky-600 hover:bg-sky-500 text-white rounded-xl text-xs font-bold transition shadow-lg shadow-sky-600/20 cursor-pointer">
+                    🛠️ Editor Livre
+                </button>
+                <button onclick="setMode('streetview')" id="btn-mode-sv" class="py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold transition cursor-pointer">
+                    🚶‍♂️ Street View Editável
+                </button>
+            </div>
+            
+            <div id="speed-control-box" class="hidden bg-slate-900/90 rounded-xl p-2 border border-slate-800 flex flex-col gap-1">
+                <div class="flex justify-between items-center text-[10px] text-slate-300">
+                    <span>Velocidade de Caminhada:</span>
+                    <span id="speed-label" class="text-sky-400 font-bold">18 km/h</span>
+                </div>
+                <input type="range" id="walkSpeedInput" min="5" max="45" value="18" oninput="updateWalkSpeed(this.value)" class="w-full accent-sky-500 cursor-pointer">
+            </div>
+        </div>
+
+        <!-- Adicionar Elementos e Mobília Detalhada -->
+        <div class="flex flex-col gap-1.5 border-t border-slate-800 pt-2">
+            <h2 class="text-[10px] font-semibold text-slate-300 uppercase tracking-wider">Adicionar Mobília & Estrutura</h2>
+            <div class="grid grid-cols-2 gap-1.5">
+                <button onclick="addObject('wall')" class="py-1.5 px-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-xl text-[11px] font-medium transition flex items-center gap-1 cursor-pointer">
+                    🧱 Parede Reta
+                </button>
+                <button onclick="addObject('door')" class="py-1.5 px-2 bg-amber-950/40 hover:bg-amber-900/40 border border-amber-800/60 rounded-xl text-[11px] font-medium text-amber-200 transition flex items-center gap-1 cursor-pointer">
+                    🚪 Porta Madeira
+                </button>
+                <button onclick="addObject('desk')" class="py-1.5 px-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-xl text-[11px] font-medium transition flex items-center gap-1 cursor-pointer">
+                    🪑 Mesa Atendimento
+                </button>
+                <button onclick="addObject('printer')" class="py-1.5 px-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-xl text-[11px] font-medium transition flex items-center gap-1 cursor-pointer">
+                    🖨️ Impressora
+                </button>
+                <button onclick="addObject('monitor')" class="py-1.5 px-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-xl text-[11px] font-medium transition flex items-center gap-1 cursor-pointer">
+                    🖥️ Monitor / PC
+                </button>
+                <button onclick="addObject('sign')" class="py-1.5 px-2 bg-emerald-950/40 hover:bg-emerald-900/40 border border-emerald-800/60 rounded-xl text-[11px] font-medium text-emerald-200 transition flex items-center gap-1 cursor-pointer">
+                    🟢 Placa Verde
+                </button>
+                <button onclick="addObject('bed')" class="py-1.5 px-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-xl text-[11px] font-medium transition flex items-center gap-1 cursor-pointer">
+                    🛏️ Leito Hospitalar
+                </button>
+                <button onclick="addObject('column')" class="py-1.5 px-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-xl text-[11px] font-medium transition flex items-center gap-1 cursor-pointer">
+                    🏛️ Coluna Pilar
+                </button>
+            </div>
+        </div>
+
+        <!-- Inspetor & Edição do Objeto Selecionado -->
+        <div id="inspector-panel" class="flex flex-col gap-1.5 border-t border-slate-800 pt-2 opacity-50 pointer-events-none transition">
+            <h2 class="text-[10px] font-semibold text-slate-300 uppercase tracking-wider">Inspetor & Modificação</h2>
+            <p id="selected-object-name" class="text-[11px] text-sky-400 font-medium truncate">Nenhum objeto selecionado</p>
+            
+            <div class="flex flex-col gap-1">
+                <label class="text-[10px] text-slate-400">Nome / Texto da Placa:</label>
+                <input type="text" id="objNameInput" oninput="updateSelectedName(this.value)" placeholder="Ex: UTI, Recepção..." class="bg-slate-900 border border-slate-700 rounded-lg px-2 py-1 text-[11px] text-slate-200 focus:outline-none focus:border-sky-500">
+            </div>
+
+            <div class="flex items-center justify-between text-[11px] pt-0.5">
+                <span class="text-slate-400">Cor do Objeto</span>
+                <input type="color" id="objColorPicker" value="#38bdf8" onchange="updateSelectedColor(this.value)" class="w-7 h-7 rounded border-0 cursor-pointer bg-transparent">
+            </div>
+
+            <!-- Alterar Tamanho (Escala) -->
+            <div class="text-[10px] text-slate-400 font-semibold pt-0.5">Alterar Tamanho (Escala):</div>
+            <div class="grid grid-cols-3 gap-1">
+                <div>
+                    <span class="text-[9px] text-slate-500">Largura (X)</span>
+                    <input type="range" id="scaleXInput" min="0.2" max="10.0" step="0.1" value="1.0" oninput="updateSelectedScale()" class="w-full accent-sky-500">
+                </div>
+                <div>
+                    <span class="text-[9px] text-slate-500">Altura (Y)</span>
+                    <input type="range" id="scaleYInput" min="0.2" max="10.0" step="0.1" value="1.0" oninput="updateSelectedScale()" class="w-full accent-sky-500">
+                </div>
+                <div>
+                    <span class="text-[9px] text-slate-500">Profundidade (Z)</span>
+                    <input type="range" id="scaleZInput" min="0.2" max="10.0" step="0.1" value="1.0" oninput="updateSelectedScale()" class="w-full accent-sky-500">
+                </div>
+            </div>
+
+            <div class="text-[10px] text-slate-400 font-semibold pt-0.5">Movimentação Vertical (Subir / Descer):</div>
+            <div class="grid grid-cols-2 gap-1.5">
+                <button onclick="moveSelectedVertical(0.5)" class="py-1.5 bg-emerald-700 hover:bg-emerald-600 text-white rounded-lg text-xs font-bold transition cursor-pointer">⬆ Subir (+0.5m)</button>
+                <button onclick="moveSelectedVertical(-0.5)" class="py-1.5 bg-rose-700 hover:bg-rose-600 text-white rounded-lg text-xs font-bold transition cursor-pointer">⬇ Descer (-0.5m)</button>
+            </div>
+
+            <div class="text-[10px] text-slate-400 font-semibold pt-0.5">Movimentação por Eixos:</div>
+            <div class="grid grid-cols-3 gap-1">
+                <button onclick="moveSelected('x', -1)" class="py-1 bg-slate-800 hover:bg-slate-700 rounded text-[11px] font-bold">X (-)</button>
+                <button onclick="moveSelected('y', 0.5)" class="py-1 bg-sky-950 hover:bg-sky-900 text-sky-300 rounded text-[11px] font-bold">Y (+)</button>
+                <button onclick="moveSelected('x', 1)" class="py-1 bg-slate-800 hover:bg-slate-700 rounded text-[11px] font-bold">X (+)</button>
+            </div>
+            <div class="grid grid-cols-3 gap-1">
+                <button onclick="moveSelected('z', -1)" class="py-1 bg-slate-800 hover:bg-slate-700 rounded text-[11px] font-bold">Z (-)</button>
+                <button onclick="moveSelected('y', -0.5)" class="py-1 bg-sky-950 hover:bg-sky-900 text-sky-300 rounded text-[11px] font-bold">Y (-)</button>
+                <button onclick="moveSelected('z', 1)" class="py-1 bg-slate-800 hover:bg-slate-700 rounded text-[11px] font-bold">Z (+)</button>
+            </div>
+
+            <button onclick="deleteSelectedObject()" class="w-full mt-1 py-1 bg-rose-600/30 hover:bg-rose-600/50 text-rose-300 border border-rose-500/30 rounded-lg text-[11px] font-medium transition cursor-pointer">
+                🗑️ Excluir Objeto
+            </button>
+        </div>
+    </div>
+
+    <!-- Notificação Flutuante (Toast) -->
+    <div id="toast" class="absolute bottom-6 left-1/2 -translate-x-1/2 bg-slate-900/95 border border-slate-700 text-slate-200 px-4 py-2 rounded-xl text-xs shadow-2xl transition-all duration-300 opacity-0 pointer-events-none z-20">
+        Ação realizada com sucesso!
+    </div>
+
+    <!-- Container do Renderizador 3D -->
+    <div id="canvas-container"></div>
+
+    <script>
+        let scene, camera, renderer, orbitControls;
+        let currentMode = 'editor';
+        let currentFloor = 0;
+        let floorHeight = 4.5;
+        let walkSpeed = 18;
+
+        let floors = {
+            0: { name: "Térreo", objects: [] },
+            1: { name: "2º Andar", objects: [] }
+        };
+
+        let selectedObject = null;
+        let raycaster = new THREE.Raycaster();
+        let mouse = new THREE.Vector2();
+
+        let isDraggingObject = false;
+
+        // Controles de Caminhada em 1ª Pessoa (Street View Editável)
+        let moveForward = false, moveBackward = false, moveLeft = false, moveRight = false;
+        let prevTime = performance.now();
+        let velocity = new THREE.Vector3();
+        let direction = new THREE.Vector3();
+        let isDraggingSV = false;
+        let previousMousePosition = { x: 0, y: 0 };
+        let euler = new THREE.Euler(0, 0, 0, 'YXZ');
+
+        init();
+        animate();
+
+        function init() {
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x020617);
+            scene.fog = new THREE.FogExp2(0x020617, 0.008);
+
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            camera.position.set(0, 25, 45);
+
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setPixelRatio(window.devicePixelRatio);
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+            document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+            orbitControls = new THREE.OrbitControls(camera, renderer.domElement);
+            orbitControls.enableDamping = true;
+            orbitControls.dampingFactor = 0.05;
+            orbitControls.maxPolarAngle = Math.PI / 2 - 0.02;
+
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.85);
+            scene.add(ambientLight);
+
+            const dirLight = new THREE.DirectionalLight(0xffffff, 0.65);
+            dirLight.position.set(50, 80, 50);
+            dirLight.castShadow = true;
+            scene.add(dirLight);
+
+            buildInitialHospitalLayout();
+
+            // Eventos de Mouse para Seleção e Arrastar e Soltar (Drag & Drop)
+            renderer.domElement.addEventListener('pointerdown', onPointerDown);
+            renderer.domElement.addEventListener('pointermove', onPointerMove);
+            renderer.domElement.addEventListener('pointerup', onPointerUp);
+
+            document.addEventListener('keydown', (e) => {
+                if (currentMode !== 'streetview') return;
+                switch (e.code) {
+                    case 'KeyW': case 'ArrowUp': moveForward = true; break;
+                    case 'KeyS': case 'ArrowDown': moveBackward = true; break;
+                    case 'KeyA': case 'ArrowLeft': moveLeft = true; break;
+                    case 'KeyD': case 'ArrowRight': moveRight = true; break;
+                }
+            });
+
+            document.addEventListener('keyup', (e) => {
+                if (currentMode !== 'streetview') return;
+                switch (e.code) {
+                    case 'KeyW': case 'ArrowUp': moveForward = false; break;
+                    case 'KeyS': case 'ArrowDown': moveBackward = false; break;
+                    case 'KeyA': case 'ArrowLeft': moveLeft = false; break;
+                    case 'KeyD': case 'ArrowRight': moveRight = false; break;
+                }
+            });
+
+            renderer.domElement.addEventListener('mousedown', (e) => {
+                if (currentMode === 'streetview' && !isDraggingObject) {
+                    isDraggingSV = true;
+                    previousMousePosition = { x: e.clientX, y: e.clientY };
+                }
+            });
+
+            renderer.domElement.addEventListener('mousemove', (e) => {
+                if (currentMode === 'streetview' && isDraggingSV) {
+                    const deltaX = e.clientX - previousMousePosition.x;
+                    const deltaY = e.clientY - previousMousePosition.y;
+
+                    euler.setFromQuaternion(camera.quaternion);
+                    euler.y -= deltaX * 0.003;
+                    euler.x -= deltaY * 0.003;
+                    euler.x = Math.max(-Math.PI / 2.2, Math.min(Math.PI / 2.2, euler.x));
+
+                    camera.quaternion.setFromEuler(euler);
+                    previousMousePosition = { x: e.clientX, y: e.clientY };
+                }
+            });
+
+            window.addEventListener('mouseup', () => { isDraggingSV = false; });
+            window.addEventListener('resize', onWindowResize);
+        }
+
+        function buildInitialHospitalLayout() {
+            createFloorSlab(0);
+            createCustomObject('wall', 0, 1.5, -25, 30, 3, 0.4, 0x94a3b8, "Corredor Principal Norte");
+            createCustomObject('door', -4, 1.5, -24.8, 1.4, 3, 0.3, 0x5c3a21, "Porta Entrada Ala");
+            createCustomObject('sign', 0, 3.2, -24.6, 4.0, 0.8, 0.2, 0x10b981, "Recepção Central");
+            createCustomObject('desk', 0, 0.75, -15, 4, 1.2, 1.5, 0x334155, "Balcão Atendimento");
+            createCustomObject('bed', -10, 0.4, -10, 2.0, 0.8, 1.2, 0x38bdf8, "UTI Leito 01");
+        }
+
+        function createFloorSlab(floorIndex) {
+            const yPos = floorIndex * floorHeight;
+            const floorGeo = new THREE.BoxGeometry(300, 0.2, 300);
+            const floorMat = new THREE.MeshStandardMaterial({ 
+                color: floorIndex === 0 ? 0x1e293b : 0x334155, 
+                roughness: 0.4 
+            });
+            const floor = new THREE.Mesh(floorGeo, floorMat);
+            floor.position.set(0, yPos - 0.1, 0);
+            floor.receiveShadow = true;
+            floor.userData = { type: 'floor', floorIndex: floorIndex, name: `Laje Piso ${floorIndex}` };
+            scene.add(floor);
+            floors[floorIndex].objects.push(floor);
+        }
+
+        function changeFloor(floorIndex) {
+            currentFloor = floorIndex;
+            if (!floors[currentFloor]) {
+                floors[currentFloor] = { name: `${currentFloor}º Andar`, objects: [] };
+                createFloorSlab(currentFloor);
+            }
+            document.getElementById('current-floor-label').innerText = `${currentFloor === 0 ? 'Térreo' : currentFloor + 'º Andar'} (${currentFloor * floorHeight}m)`;
+            
+            if (currentMode === 'streetview') {
+                camera.position.y = (currentFloor * floorHeight) + 1.7;
+            }
+
+            updateObjectsVisibility();
+            showToast(`Pavimento alterado para ${currentFloor === 0 ? 'Térreo' : currentFloor + 'º Andar'}`);
+        }
+
+        function addNewFloor() {
+            const nextFloorIndex = Object.keys(floors).length;
+            floors[nextFloorIndex] = { name: `${nextFloorIndex}º Andar`, objects: [] };
+            createFloorSlab(nextFloorIndex);
+            changeFloor(nextFloorIndex);
+            showToast(`Novo ${nextFloorIndex}º Andar construído!`);
+        }
+
+        function addObject(type) {
+            let width = 2, height = 3, depth = 2;
+            let color = 0x38bdf8;
+            let name = "Novo Objeto";
+
+            if (type === 'wall') { width = 10; height = 3; depth = 0.4; color = 0x94a3b8; name = "Parede Reta"; }
+            else if (type === 'door') { width = 1.4; height = 3; depth = 0.3; color = 0x5c3a21; name = "Porta Madeira"; }
+            else if (type === 'desk') { width = 2.4; height = 0.8; depth = 1.2; color = 0x334155; name = "Mesa Escritório"; }
+            else if (type === 'printer') { width = 0.6; height = 0.6; depth = 0.6; color = 0xe2e8f0; name = "Impressora"; }
+            else if (type === 'monitor') { width = 0.7; height = 0.5; depth = 0.3; color = 0x0ea5e9; name = "Monitor / PC"; }
+            else if (type === 'sign') { width = 3.0; height = 0.8; depth = 0.2; color = 0x10b981; name = "Placa Verde Setor"; }
+            else if (type === 'bed') { width = 1.8; height = 0.8; depth = 1.0; color = 0x38bdf8; name = "Leito Hospitalar"; }
+            else if (type === 'column') { width = 0.8; height = 3; depth = 0.8; color = 0xf59e0b; name = "Coluna Pilar"; }
+
+            const yPos = (currentFloor * floorHeight) + (height / 2);
+            let spawnX = 0, spawnZ = -5;
+            
+            if (currentMode === 'streetview') {
+                const dir = new THREE.Vector3();
+                camera.getWorldDirection(dir);
+                spawnX = camera.position.x + dir.x * 6;
+                spawnZ = camera.position.z + dir.z * 6;
+            }
+
+            createCustomObject(type, spawnX, yPos, spawnZ, width, height, depth, color, name);
+            showToast(`${name} adicionado!`);
+        }
+
+        function createCustomObject(type, x, y, z, w, h, d, colorHex, name) {
+            let mat;
+            if (type === 'sign') {
+                const canvas = document.createElement('canvas');
+                canvas.width = 512; canvas.height = 256;
+                const ctx = canvas.getContext('2d');
+                ctx.fillStyle = '#065f46';
+                ctx.fillRect(0, 0, 512, 256);
+                ctx.fillStyle = '#ffffff';
+                ctx.font = 'bold 42px Inter, sans-serif';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(name, 256, 128);
+                const texture = new THREE.CanvasTexture(canvas);
+                mat = new THREE.MeshStandardMaterial({ map: texture, roughness: 0.3 });
+            } else if (type === 'door') {
+                mat = new THREE.MeshStandardMaterial({ color: 0x5c3a21, roughness: 0.4 });
+            } else {
+                mat = new THREE.MeshStandardMaterial({ color: colorHex, roughness: 0.4 });
+            }
+
+            const geo = new THREE.BoxGeometry(w, h, d);
+            const mesh = new THREE.Mesh(geo, mat);
+            mesh.position.set(x, y, z);
+            mesh.castShadow = true;
+            mesh.receiveShadow = true;
+
+            mesh.userData = {
+                id: Math.random().toString(36).substr(2, 9),
+                type: type,
+                name: name,
+                floor: currentFloor
+            };
+
+            scene.add(mesh);
+            if (!floors[currentFloor]) floors[currentFloor] = { objects: [] };
+            floors[currentFloor].objects.push(mesh);
+
+            selectObject(mesh);
+        }
+
+        function onPointerDown(event) {
+            if (event.target.closest('#ui-container') || event.target.closest('#btn-restore')) return;
+
+            if (currentMode === 'streetview') {
+                // No modo Street View, a seleção ocorre estritamente pela mira central (centro da tela)
+                mouse.x = 0;
+                mouse.y = 0;
+            } else {
+                // No modo Editor Livre, usa a posição exata do clique do mouse
+                mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+                mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+            }
+
+            raycaster.setFromCamera(mouse, camera);
+            
+            let intersectableObjects = [];
+            Object.values(floors).forEach(f => {
+                if (f && f.objects) {
+                    f.objects.forEach(obj => {
+                        if (obj.userData.type !== 'floor') intersectableObjects.push(obj);
+                    });
+                }
+            });
+
+            const intersects = raycaster.intersectObjects(intersectableObjects, true);
+
+            if (intersects.length > 0) {
+                let clickedMesh = intersects[0].object;
+                
+                // No modo Street View, limitamos a distância de seleção para itens na frente do jogador (ex: até 15 metros)
+                if (currentMode === 'streetview' && intersects[0].distance > 15) {
+                    return;
+                }
+
+                selectObject(clickedMesh);
+
+                if (currentMode === 'editor') {
+                    isDraggingObject = true;
+                    orbitControls.enabled = false;
+                }
+            }
+        }
+
+        function onPointerMove(event) {
+            if (!isDraggingObject || !selectedObject || currentMode === 'streetview') return;
+
+            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
+            mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
+
+            raycaster.setFromCamera(mouse, camera);
+            
+            const plane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -selectedObject.position.y);
+            let targetPos = new THREE.Vector3();
+            raycaster.ray.intersectPlane(plane, targetPos);
+
+            if (targetPos) {
+                selectedObject.position.x = targetPos.x;
+                selectedObject.position.z = targetPos.z;
+            }
+        }
+
+        function onPointerUp() {
+            if (isDraggingObject) {
+                isDraggingObject = false;
+                if (currentMode === 'editor') {
+                    orbitControls.enabled = true;
+                }
+            }
+        }
+
+        function selectObject(mesh) {
+            selectedObject = mesh;
+            const inspector = document.getElementById('inspector-panel');
+            inspector.style.opacity = '1';
+            inspector.style.pointerEvents = 'auto';
+
+            document.getElementById('selected-object-name').innerText = `Selecionado: ${mesh.userData.name}`;
+            document.getElementById('objNameInput').value = mesh.userData.name;
+            
+            if (mesh.material.color) {
+                document.getElementById('objColorPicker').value = '#' + mesh.material.color.getHexString();
+            }
+            
+            document.getElementById('scaleXInput').value = mesh.scale.x;
+            document.getElementById('scaleYInput').value = mesh.scale.y;
+            document.getElementById('scaleZInput').value = mesh.scale.z;
+        }
+
+        function updateSelectedName(newName) {
+            if (!selectedObject) return;
+            selectedObject.userData.name = newName;
+            document.getElementById('selected-object-name').innerText = `Selecionado: ${newName}`;
+
+            if (selectedObject.userData.type === 'sign') {
+                const canvas = document.createElement('canvas');
+                canvas.width = 512; canvas.height = 256;
+                const ctx = canvas.getContext('2d');
+                ctx.fillStyle = '#065f46';
+                ctx.fillRect(0, 0, 512, 256);
+                ctx.fillStyle = '#ffffff';
+                ctx.font = 'bold 42px Inter, sans-serif';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(newName, 256, 128);
+                selectedObject.material.map = new THREE.CanvasTexture(canvas);
+                selectedObject.material.needsUpdate = true;
+            }
+        }
+
+        function updateSelectedColor(hex) {
+            if (!selectedObject) return;
+            if (selectedObject.material.color) {
+                selectedObject.material.color.set(hex);
+                showToast("Cor alterada!");
+            }
+        }
+
+        function updateSelectedScale() {
+            if (!selectedObject) return;
+            const sx = parseFloat(document.getElementById('scaleXInput').value);
+            const sy = parseFloat(document.getElementById('scaleYInput').value);
+            const sz = parseFloat(document.getElementById('scaleZInput').value);
+
+            selectedObject.scale.set(sx, sy, sz);
+        }
+
+        function moveSelected(axis, amount) {
+            if (!selectedObject) return;
+            selectedObject.position[axis] += amount;
+            showToast(`Objeto movido no eixo ${axis.toUpperCase()}`);
+        }
+
+        function moveSelectedVertical(amount) {
+            if (!selectedObject) return;
+            selectedObject.position.y += amount;
+            showToast(`Objeto elevado para Y: ${selectedObject.position.y.toFixed(1)}m`);
+        }
+
+        function deleteSelectedObject() {
+            if (!selectedObject) return;
+            scene.remove(selectedObject);
+            
+            Object.values(floors).forEach(f => {
+                if (f && f.objects) {
+                    const idx = f.objects.indexOf(selectedObject);
+                    if (idx > -1) f.objects.splice(idx, 1);
+                }
+            });
+
+            selectedObject = null;
+            document.getElementById('inspector-panel').style.opacity = '0.5';
+            document.getElementById('inspector-panel').style.pointerEvents = 'none';
+            document.getElementById('selected-object-name').innerText = "Nenhum objeto selecionado";
+            showToast("Objeto excluído!");
+        }
+
+        function searchAndTeleport() {
+            const query = document.getElementById('searchInput').value.toLowerCase().trim();
+            if (!query) return;
+
+            let foundObject = null;
+            let foundFloor = 0;
+
+            Object.keys(floors).forEach(floorNum => {
+                if (floors[floorNum] && floors[floorNum].objects) {
+                    floors[floorNum].objects.forEach(obj => {
+                        if (obj.userData.name && obj.userData.name.toLowerCase().includes(query)) {
+                            foundObject = obj;
+                            foundFloor = parseInt(floorNum);
+                        }
+                    });
+                }
+            });
+
+            if (foundObject) {
+                changeFloor(foundFloor);
+                selectObject(foundObject);
+
+                if (currentMode === 'editor') {
+                    orbitControls.target.copy(foundObject.position);
+                    camera.position.set(foundObject.position.x, foundObject.position.y + 15, foundObject.position.z + 25);
+                } else {
+                    camera.position.set(foundObject.position.x, (foundFloor * floorHeight) + 1.7, foundObject.position.z + 6);
+                }
+
+                showToast(`Teletransportado para: "${foundObject.userData.name}"`);
+            } else {
+                showToast(`Nenhum setor encontrado com "${query}"`);
+            }
+        }
+
+        function toggleMenu() {
+            const menu = document.getElementById('ui-container');
+            const restoreBtn = document.getElementById('btn-restore');
+            menu.classList.toggle('minimized');
+            if (menu.classList.contains('minimized')) {
+                restoreBtn.classList.remove('hidden');
+            } else {
+                restoreBtn.classList.add('hidden');
+            }
+        }
+
+        function updateWalkSpeed(val) {
+            walkSpeed = parseInt(val);
+            document.getElementById('speed-label').innerText = `${walkSpeed} km/h`;
+        }
+
+        function setMode(mode) {
+            currentMode = mode;
+            const btnEditor = document.getElementById('btn-mode-editor');
+            const btnSV = document.getElementById('btn-mode-sv');
+            const badge = document.getElementById('mode-badge');
+            const speedBox = document.getElementById('speed-control-box');
+            const crosshair = document.getElementById('crosshair');
+            const hint = document.getElementById('instruction-hint');
+
+            if (mode === 'editor') {
+                btnEditor.className = "py-1.5 bg-sky-600 hover:bg-sky-500 text-white rounded-xl text-xs font-bold transition shadow-lg shadow-sky-600/20 cursor-pointer";
+                btnSV.className = "py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold transition cursor-pointer";
+                badge.className = "px-2 py-0.5 bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-full text-[10px] font-semibold";
+                badge.innerText = "Editor";
+                speedBox.classList.add('hidden');
+                crosshair.style.display = 'none';
+                hint.innerText = "Clique em qualquer objeto para selecionar. Clique e segure para arrastar no chão!";
+                
+                orbitControls.enabled = true;
+                camera.position.set(0, 35, 50);
+                orbitControls.target.set(0, currentFloor * floorHeight, 0);
+            } else {
+                btnSV.className = "py-1.5 bg-sky-600 hover:bg-sky-500 text-white rounded-xl text-xs font-bold transition shadow-lg shadow-sky-600/20 cursor-pointer";
+                btnEditor.className = "py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl text-xs font-semibold transition cursor-pointer";
+                badge.className = "px-2 py-0.5 bg-sky-500/20 text-sky-400 border border-sky-500/30 rounded-full text-[10px] font-semibold";
+                badge.innerText = "Street View Editável";
+                speedBox.classList.remove('hidden');
+                crosshair.style.display = 'block';
+                hint.innerText = "Use W, A, S, D para andar, arraste o mouse para olhar. Clique com o mouse para selecionar o objeto que estiver sob a mira central!";
+                
+                orbitControls.enabled = false;
+                camera.position.set(0, (currentFloor * floorHeight) + 1.7, 10);
+                camera.rotation.set(0, 0, 0);
+            }
+            showToast(`Modo alterado para ${mode === 'editor' ? 'Editor Livre' : 'Street View Editável'}`);
+        }
+
+        function updateObjectsVisibility() {
+            Object.keys(floors).forEach(floorNum => {
+                const fIndex = parseInt(floorNum);
+                const isVisible = fIndex <= currentFloor;
+                if (floors[floorNum] && floors[floorNum].objects) {
+                    floors[floorNum].objects.forEach(obj => {
+                        obj.visible = isVisible || fIndex === currentFloor;
+                    });
+                }
+            });
+        }
+
+        function showToast(message) {
+            const toast = document.getElementById('toast');
+            toast.innerText = message;
+            toast.style.opacity = '1';
+            setTimeout(() => {
+                toast.style.opacity = '0';
+            }, 2500);
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            const time = performance.now();
+            const delta = (time - prevTime) / 1000;
+
+            if (currentMode === 'streetview') {
+                velocity.x -= velocity.x * 10.0 * delta;
+                velocity.z -= velocity.z * 10.0 * delta;
+
+                direction.z = Number(moveForward) - Number(moveBackward);
+                direction.x = Number(moveRight) - Number(moveLeft);
+                direction.normalize();
+
+                const currentAccel = walkSpeed * 1.8;
+                if (moveForward || moveBackward) velocity.z -= direction.z * currentAccel * delta;
+                if (moveLeft || moveRight) velocity.x -= direction.x * currentAccel * delta;
+
+                // Salva a posição anterior para reverter caso haja colisão com paredes
+                const oldPositionX = camera.position.x;
+                const oldPositionZ = camera.position.z;
+
+                camera.translateX(-velocity.x * delta);
+                camera.translateZ(velocity.z * delta);
+
+                camera.position.y = (currentFloor * floorHeight) + 1.7;
+
+                let hasCollided = false;
+                const playerRadius = 0.6; // Raio de colisão do jogador
+
+                if (floors[currentFloor] && floors[currentFloor].objects) {
+                    floors[currentFloor].objects.forEach(obj => {
+                        // Apenas objetos do tipo 'wall' ou 'column' geram colisão (portas são ignoradas para permitir passagem)
+                        if (obj.userData && (obj.userData.type === 'wall' || obj.userData.type === 'column')) {
+                            obj.geometry.computeBoundingBox();
+                            const box = new THREE.Box3().setFromObject(obj);
+                            
+                            // Expande a caixa ligeiramente com o raio do jogador
+                            box.expandByScalar(playerRadius);
+
+                            if (box.containsPoint(camera.position)) {
+                                hasCollided = true;
+                            }
+                        }
+                    });
+                }
+
+                // Se colidiu com uma parede, reverte o movimento para bloquear a passagem
+                if (hasCollided) {
+                    camera.position.x = oldPositionX;
+                    camera.position.z = oldPositionZ;
+                    velocity.set(0, 0, 0);
+                }
+
+            } else {
+                orbitControls.update();
+            }
+
+            prevTime = time;
+            renderer.render(scene, camera);
+        }
+    </script>
+</body>
+</html>
